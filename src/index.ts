@@ -151,7 +151,7 @@ export const inject = ['llm']
  * into this package (upstream DSH plugins, `dsh-llm-pi-ai` included, pass
  * their namespaces as plain string literals).
  */
-export const WORKBUDDY_SETTINGS_NS = 'workbuddy' as SettingsNamespace
+export const WORKBUDDY_SETTINGS_NS = 'codebuddy' as SettingsNamespace
 
 /**
  * Settings namespace owning the international card's section.

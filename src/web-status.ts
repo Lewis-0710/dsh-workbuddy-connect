@@ -82,9 +82,11 @@ export async function workBuddyWebStatus(
     // A diagnosable sign-out (a credential for the *other* product) keeps its
     // explanation: falling back to the generic hint would tell the user to sign
     // in when the real fix is to correct a path.
+    const catalog = deps.catalog?.()
     return {
       status: 'signed-out',
       ...authStatus.reason === undefined ? {} : { reason: authStatus.reason },
+      ...catalog === undefined ? {} : { catalog },
     }
   }
   const status: WorkBuddyWebStatus = {

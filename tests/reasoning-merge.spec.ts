@@ -76,14 +76,14 @@ async function boot(options: {
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(WorkBuddy, {})
   await vi.waitFor(() => {
-    expect(ctx.llm.listProviders().map(provider => provider.id)).toContain('workbuddy')
+    expect(ctx.llm.listProviders().map(provider => provider.id)).toContain('codebuddy')
   })
   return ctx
 }
 
 /** The resolved efforts for one model, sorted, or undefined when none exist. */
 async function effortsFor(ctx: Context, modelId: string): Promise<string[] | undefined> {
-  const resolved = await ctx.llm.resolveModelInfo('workbuddy', modelId)
+  const resolved = await ctx.llm.resolveModelInfo('codebuddy', modelId)
   return resolved.reasoning?.efforts.map(effort => effort.id).sort()
 }
 

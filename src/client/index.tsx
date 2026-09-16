@@ -16,7 +16,7 @@ import type { WorkBuddySettingsKey } from './locales.ts'
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
     /** WorkBuddy plugin card copy. */
-    'settings.workbuddy': WorkBuddySettingsKey
+    'settings.codebuddy': WorkBuddySettingsKey
   }
 }
 
@@ -60,7 +60,7 @@ export const inject = ['slots', 'locale', 'remote', 'remote.session']
  */
 export function apply(ctx: ClientContext): void {
   try {
-    const namespace = 'settings.workbuddy'
+    const namespace = 'settings.codebuddy'
     ctx.effect(() => ctx.locale.register(namespace, { zh, en }), 'dsh-workbuddy-connect: settings copy')
     const t = ctx.locale.bind(namespace) as WorkBuddyPluginCardInjected['t']
     // One card per variant. They show different accounts, balances, and model

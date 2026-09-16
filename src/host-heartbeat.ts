@@ -18,7 +18,7 @@ import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { WORKBUDDY_CONNECT_VERSION } from './version.ts'
 
 /** Basename of the host heartbeat file inside the Harness home. */
-export const WORKBUDDY_HOST_HEARTBEAT_FILENAME = '.workbuddy-host-heartbeat.json'
+export const WORKBUDDY_HOST_HEARTBEAT_FILENAME = '.codebuddy-host-heartbeat.json'
 
 /** Current on-disk heartbeat format; readers reject others. */
 const HEARTBEAT_FORMAT_VERSION = 1

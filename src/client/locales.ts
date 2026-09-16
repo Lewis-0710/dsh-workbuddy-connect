@@ -1,7 +1,7 @@
 /** Plugin-card copy registered under the settings.workbuddy locale namespace. */
 
 export const en = {
-  title: 'DSH WorkBuddy Connect',
+  title: 'CodeBuddy',
   intro: 'Use the models in the WorkBuddy desktop app directly in DSH — zero configuration, ready out of the box.',
   titleAI: 'DSH WorkBuddy AI Connect',
   introAI: 'Use the models in the WorkBuddy AI international desktop app directly in DSH — zero configuration, ready out of the box.',
@@ -80,7 +80,7 @@ export const en = {
 export type WorkBuddySettingsKey = keyof typeof en
 
 export const zh: Record<WorkBuddySettingsKey, string> = {
-  title: 'DSH WorkBuddy Connect',
+  title: 'CodeBuddy',
   intro: '在 DSH 中直接使用 WorkBuddy 桌面 App 包含的模型，开箱即用，无需额外配置。',
   titleAI: 'DSH WorkBuddy AI Connect',
   introAI: '在 DSH 中直接使用 WorkBuddy AI 国际版桌面 App 包含的模型，开箱即用，无需额外配置。',

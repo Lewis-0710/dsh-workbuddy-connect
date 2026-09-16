@@ -18,6 +18,7 @@ const CLIENT_EXTERNALS = [
   '@deepseek-ai/dsh-client-runtime/client',
   '@deepseek-ai/dsh-client-ui-slots',
   '@deepseek-ai/dsh-client-locale/client',
+  '@deepseek-ai/dsh-client-ui-primitives',
 ] as const
 
 export default [

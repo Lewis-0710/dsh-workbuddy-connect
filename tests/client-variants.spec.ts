@@ -27,7 +27,7 @@ const t = (key: keyof typeof en, params: Record<string, unknown> = {}): string =
 describe('card variants', () => {
   it('exposes one card per provider, with distinct routes and copy', () => {
     expect(CARD_VARIANTS).toHaveLength(2)
-    expect(CARD_VARIANTS.map(card => card.id)).toEqual(['workbuddy', 'workbuddy-ai'])
+    expect(CARD_VARIANTS.map(card => card.id)).toEqual(['codebuddy', 'workbuddy-ai'])
     const routes = CARD_VARIANTS.map(card => `${card.statusPath}|${card.probePath}`)
     expect(new Set(routes).size).toBe(2)
     // Distinct title/intro/hint keys, so one product's copy cannot appear as the
@@ -38,7 +38,7 @@ describe('card variants', () => {
   })
 
   it('routes each provider id to its own card and nothing else', () => {
-    expect(cardVariantFor('workbuddy')).toBe(CN_CARD_VARIANT)
+    expect(cardVariantFor('codebuddy')).toBe(CN_CARD_VARIANT)
     expect(cardVariantFor('workbuddy-ai')).toBe(AI_CARD_VARIANT)
     // Any other provider resolves to no card, which is what keeps the composer
     // entry off non-WorkBuddy models.
@@ -53,7 +53,7 @@ describe('card variants', () => {
       expect(zh[card.signedOutKey]).toBeTruthy()
       // The two titles must actually differ in each language, not just be
       // distinct keys with identical text.
-      expect(zh[card.titleKey]).toContain(card.id === 'workbuddy-ai' ? 'AI' : 'WorkBuddy')
+      expect(zh[card.titleKey]).toContain(card.id === 'workbuddy-ai' ? 'AI' : 'CodeBuddy')
     }
     expect(zh.titleAI).not.toBe(zh.title)
     expect(en.titleAI).not.toBe(en.title)
@@ -154,7 +154,7 @@ describe('composer control provider routing', () => {
       probeKey: 'test-key',
       probe: { consent: true, running: false, candidates: ['glm-5.2'], results: [] },
     }
-    select('workbuddy', 'glm-5.2')
+    select('codebuddy', 'glm-5.2')
     request.mockReset().mockImplementation(async () => ({ ok: true, json: async () => statusBody }))
     vi.stubGlobal('fetch', request)
     vi.stubGlobal('window', {

@@ -47,8 +47,8 @@ function storeFor(variant: typeof CN_VARIANT, desktopPath: string, ownPath: stri
 describe('variant descriptors', () => {
   it('keeps the CN provider byte-identical to its historical identity', () => {
     // Existing installs, settings files, and status paths must not move.
-    expect(CN_VARIANT.id).toBe('workbuddy')
-    expect(CN_VARIANT.displayName).toBe('WorkBuddy')
+    expect(CN_VARIANT.id).toBe('codebuddy')
+    expect(CN_VARIANT.displayName).toBe('CodeBuddy')
     expect(CN_VARIANT.env).toBe('WORKBUDDY_AUTH_FILE')
     expect(CN_VARIANT.desktopFilename).toBe('workbuddy-desktop.info')
     expect(CN_VARIANT.ownFilename).toBe('.workbuddy-auth.json')
@@ -91,7 +91,7 @@ describe('variant descriptors', () => {
   })
 
   it('resolves a variant by provider id and nothing else', () => {
-    expect(variantFor('workbuddy')).toBe(CN_VARIANT)
+    expect(variantFor('codebuddy')).toBe(CN_VARIANT)
     expect(variantFor('workbuddy-ai')).toBe(AI_VARIANT)
     expect(variantFor('workbuddy-ai-2')).toBeUndefined()
     expect(variantFor('')).toBeUndefined()

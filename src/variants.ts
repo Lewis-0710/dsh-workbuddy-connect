@@ -53,9 +53,9 @@ export interface WorkBuddyVariant {
 /** CN WorkBuddy first: the existing provider keeps its id, paths, and copy. */
 export const WORKBUDDY_VARIANTS: readonly WorkBuddyVariant[] = [
   {
-    id: 'workbuddy',
-    displayName: 'WorkBuddy',
-    appName: 'WorkBuddy',
+    id: 'codebuddy',
+    displayName: 'CodeBuddy',
+    appName: 'CodeBuddy',
     region: 'cn',
     env: 'WORKBUDDY_AUTH_FILE',
     desktopFilename: 'workbuddy-desktop.info',

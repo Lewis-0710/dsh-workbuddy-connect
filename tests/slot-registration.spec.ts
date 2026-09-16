@@ -70,7 +70,7 @@ describe('settings.plugin.item holds both cards', () => {
     // `options` — one cell each, which is what the settings page renders.
     const cells = (core.entriesOfSlot as any)('settings.plugin.item') as { options: { key?: string } }[]
     expect(cells).toHaveLength(2)
-    expect(cells.map(cell => cell.options.key).sort()).toEqual(['workbuddy', 'workbuddy-ai'])
+    expect(cells.map(cell => cell.options.key).sort()).toEqual(['codebuddy', 'workbuddy-ai'])
   })
 
   it('rejects a duplicate key at the same priority, which is why priorities differ', () => {

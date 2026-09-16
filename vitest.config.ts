@@ -10,6 +10,11 @@ export default defineConfig({
   define: {
     __DSH_WORKBUDDY_VERSION__: JSON.stringify(PACKAGE_VERSION),
   },
+  resolve: {
+    alias: {
+      '@deepseek-ai/dsh-client-ui-primitives': new URL('./tests/mocks/primitives.ts', import.meta.url).pathname,
+    },
+  },
   test: {
     include: ['tests/**/*.spec.ts'],
     environment: 'node',

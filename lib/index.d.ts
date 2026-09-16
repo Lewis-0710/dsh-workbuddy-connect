@@ -867,7 +867,7 @@ declare function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddySh
 //#endregion
 //#region src/adapter.d.ts
 /** Provider route this bundle owns. */
-declare const WORKBUDDY_PROVIDER = "workbuddy";
+declare const WORKBUDDY_PROVIDER = "codebuddy";
 /** Provider idle ceiling while one stream read is outstanding. */
 declare const WORKBUDDY_STREAM_IDLE_TIMEOUT_MS = 300000;
 /** Constructor dependencies. */
@@ -1033,7 +1033,7 @@ declare class WorkBuddyProbeService {
  * @module dsh-workbuddy-connect/host-heartbeat
  */
 /** Basename of the host heartbeat file inside the Harness home. */
-declare const WORKBUDDY_HOST_HEARTBEAT_FILENAME = ".workbuddy-host-heartbeat.json";
+declare const WORKBUDDY_HOST_HEARTBEAT_FILENAME = ".codebuddy-host-heartbeat.json";
 /** Current on-disk heartbeat format; readers reject others. */
 declare const HEARTBEAT_FORMAT_VERSION = 1;
 /** On-disk shape of the heartbeat. */

@@ -1,3 +1,13 @@
+> [!NOTE]
+> **Fork 维护版本** | 本仓库是 [corrinehu/dsh-workbuddy-connect](https://github.com/corrinehu/dsh-workbuddy-connect) 的维护分支。
+> 
+> **与上游差异**：
+> 1. WorkBuddy → CodeBuddy 品牌重命名（provider ID、设置命名空间、显示名称）
+> 2. 设置项 ID 从 workbuddy 改为 codebuddy
+> 3. 适配 DSH 0.1.5+ 客户端包拆分
+> 
+> 详见 [sync.patch](./sync.patch)。
+
 # DSH WorkBuddy Connect
 
 

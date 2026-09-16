@@ -1,7 +1,8 @@
 /** WorkBuddy status card contributed to Harness Plugin configuration. */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { createElement as h, useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
+import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import { WORKBUDDY_AI_PROBE_PATH, WORKBUDDY_AI_STATUS_PATH, WORKBUDDY_PROBE_PATH, WORKBUDDY_STATUS_PATH } from '../status-paths.ts'
@@ -37,7 +38,7 @@ export interface WorkBuddyCardVariant {
 
 /** CN WorkBuddy; the plugin's long-standing card and default. */
 export const CN_CARD_VARIANT: WorkBuddyCardVariant = {
-  id: 'workbuddy',
+  id: 'codebuddy',
   titleKey: 'title',
   introKey: 'intro',
   signedOutKey: 'signedOutHint',
@@ -66,9 +67,9 @@ const POLL_INTERVAL_MS = 60_000
 
 const cardStyle: CSSProperties = {
   overflow: 'hidden',
-  border: '1px solid var(--dsw-alias-border-l2)',
-  borderRadius: 10,
-  background: 'var(--dsw-alias-bg-module-platform)',
+  border: '1px solid var(--dsw-alias-border-l2, #36373b)',
+  borderRadius: 12,
+  background: 'var(--dsw-alias-bg-layer-3, #202126)',
 }
 const headerStyle: CSSProperties = {
   boxSizing: 'border-box',
@@ -76,19 +77,20 @@ const headerStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
-  gap: 16,
+  gap: 12,
   border: 0,
-  padding: '13px 14px',
+  borderRadius: 12,
+  padding: '14px 16px',
   background: 'transparent',
-  color: 'var(--dsw-alias-label-primary)',
+  color: 'inherit',
   font: 'inherit',
   textAlign: 'left',
   cursor: 'pointer',
 }
-const headTextStyle: CSSProperties = { display: 'flex', minWidth: 0, flexDirection: 'column', gap: 3 }
-const nameStyle: CSSProperties = { fontSize: 14, lineHeight: '20px', fontWeight: 600 }
-const descriptionStyle: CSSProperties = { fontSize: 13, lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary)' }
-const chevronStyle: CSSProperties = { flex: '0 0 auto', fontSize: 18, lineHeight: 1, transition: 'transform 120ms ease' }
+const headTextStyle: CSSProperties = { display: 'flex', minWidth: 0, flexDirection: 'column', gap: 4 }
+const nameStyle: CSSProperties = { color: 'var(--dsw-alias-label-primary, #e6e6e6)', fontSize: 15, lineHeight: 1.4, fontWeight: 600 }
+const descriptionStyle: CSSProperties = { color: 'var(--dsw-alias-label-tertiary, #999)', fontSize: 13, lineHeight: 1.5 }
+const chevronStyle: CSSProperties = { color: 'var(--dsw-alias-label-tertiary, #999)', flex: 'none', display: 'inline-flex', transition: 'transform .16s' }
 const cardBodyStyle: CSSProperties = { borderTop: '1px solid var(--dsw-alias-border-l2)', padding: '16px 14px 18px' }
 
 const bodyStyle: CSSProperties = { margin: 0, fontSize: 14, lineHeight: '22px', color: 'var(--dsw-alias-label-secondary)' }
@@ -776,7 +778,9 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
           <span style={nameStyle}>{title}</span>
           <span style={descriptionStyle}>{t(variant.introKey)}</span>
         </span>
-        <span aria-hidden="true" style={{ ...chevronStyle, transform: open ? 'rotate(180deg)' : 'none' }}>⌄</span>
+        <span aria-hidden="true" style={{ ...chevronStyle, transform: open ? 'rotate(180deg)' : 'none' }}>
+          {h(IconChevronDownOutline14, { size: 14 })}
+        </span>
       </button>
       {open
         ? <div style={cardBodyStyle}>

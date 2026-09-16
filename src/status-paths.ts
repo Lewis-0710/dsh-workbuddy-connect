@@ -156,6 +156,8 @@ export type WorkBuddyWebStatus =
      * The card renders it in place of the generic sign-in hint.
      */
     reason?: string
+    /** Where those models came from, even when signed out. */
+    catalog?: WorkBuddyWebCatalog
   }
   | {
     status: 'signed-in'

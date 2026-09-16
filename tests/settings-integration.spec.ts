@@ -67,12 +67,12 @@ describe('WorkBuddy Host settings integration', () => {
 
     // Registration rides on the loopback shim's listening event.
     await vi.waitFor(() => {
-      expect(ctx.llm.listProviders().map(provider => provider.id)).toContain('workbuddy')
+      expect(ctx.llm.listProviders().map(provider => provider.id)).toContain('codebuddy')
     })
     expect(ctx.llm.listConfigurableProviders()).toContainEqual({
-      provider: 'workbuddy',
-      displayName: 'WorkBuddy',
-      settingsNs: 'workbuddy',
+      provider: 'codebuddy',
+      displayName: 'CodeBuddy',
+      settingsNs: 'codebuddy',
       settingsPath: [],
       declared: false,
     })
@@ -81,7 +81,7 @@ describe('WorkBuddy Host settings integration', () => {
     const descriptor = ctx.settings.describe().find(entry => entry.ns === WorkBuddy.WORKBUDDY_SETTINGS_NS)
     expect(descriptor).toBeDefined()
 
-    const models = await ctx.llm.listModels('workbuddy')
+    const models = await ctx.llm.listModels('codebuddy')
     expect(models.map(model => model.id)).toContain('auto')
     expect(models.map(model => model.id)).toContain('deepseek-v4-pro')
     // The fallback catalog tracks the live `cli` roster, including the newer
@@ -107,9 +107,9 @@ describe('WorkBuddy Host settings integration', () => {
     // list (the older `{effort, summary}` shape) expose no control at all, so
     // requests never carry `reasoning_effort` for them and the upstream
     // default applies — matching the desktop app's own per-model gating.
-    const autoResolved = await ctx.llm.resolveModelInfo('workbuddy', 'auto')
+    const autoResolved = await ctx.llm.resolveModelInfo('codebuddy', 'auto')
     expect(autoResolved.reasoning).toBeUndefined()
-    const flashResolved = await ctx.llm.resolveModelInfo('workbuddy', 'glm-5.3-flash')
+    const flashResolved = await ctx.llm.resolveModelInfo('codebuddy', 'glm-5.3-flash')
     expect(flashResolved.reasoning?.efforts.map(effort => effort.id).sort()).toEqual(['high', 'low', 'max', 'off'])
 
     // Image modalities follow the per-model catalog flag (fallback list here):
@@ -155,7 +155,7 @@ describe('WorkBuddy Host settings integration', () => {
 
     await vi.waitFor(() => {
       expect(ctx.llm.listProviders().map(provider => provider.id)).toEqual(
-        expect.arrayContaining(['workbuddy', 'workbuddy-ai']),
+        expect.arrayContaining(['codebuddy', 'workbuddy-ai']),
       )
     })
 
@@ -164,7 +164,7 @@ describe('WorkBuddy Host settings integration', () => {
     // page resolves `settingsNs` against served sections, so a shared ns would
     // render both providers onto one card.
     expect(ctx.llm.listConfigurableProviders()).toEqual(expect.arrayContaining([
-      { provider: 'workbuddy', displayName: 'WorkBuddy', settingsNs: 'workbuddy', settingsPath: [], declared: false },
+      { provider: 'codebuddy', displayName: 'CodeBuddy', settingsNs: 'codebuddy', settingsPath: [], declared: false },
       { provider: 'workbuddy-ai', displayName: 'WorkBuddy AI', settingsNs: 'workbuddy-ai', settingsPath: [], declared: false },
     ]))
 
@@ -189,8 +189,8 @@ describe('WorkBuddy Host settings integration', () => {
       const root = (descriptor?.schema as { refs?: Record<string, { dict?: Record<string, unknown> }>, uid?: string } | undefined)?.refs?.[String((descriptor?.schema as { uid?: number } | undefined)?.uid)]
       return Object.keys(root?.dict ?? {})
     }
-    expect(fieldsOf('workbuddy')).toContain('authFile')
-    expect(fieldsOf('workbuddy')).not.toContain('authFileAI')
+    expect(fieldsOf('codebuddy')).toContain('authFile')
+    expect(fieldsOf('codebuddy')).not.toContain('authFileAI')
     expect(fieldsOf('workbuddy-ai')).toEqual(['authFileAI'])
 
     // A write through one section must reach ONLY that variant's store. The
@@ -213,7 +213,7 @@ describe('WorkBuddy Host settings integration', () => {
     // of surfacing as a timeout. Two sweeps at the 100 ms interval above.
     await new Promise(resolve => setTimeout(resolve, 400))
     expect(await ctx.llm.listModels('workbuddy-ai')).toEqual([])
-    expect((await ctx.llm.listModels('workbuddy')).length).toBeGreaterThan(0)
+    expect((await ctx.llm.listModels('codebuddy')).length).toBeGreaterThan(0)
 
     // And the setting is genuinely read back through the merged config: putting
     // a valid international file back restores the group.
@@ -223,7 +223,7 @@ describe('WorkBuddy Host settings integration', () => {
     }, { timeout: 10_000 })
 
     await vi.waitFor(async () => {
-      expect((await ctx.llm.listModels('workbuddy')).length).toBeGreaterThan(0)
+      expect((await ctx.llm.listModels('codebuddy')).length).toBeGreaterThan(0)
       expect((await ctx.llm.listModels('workbuddy-ai')).length).toBeGreaterThan(0)
     })
 
@@ -231,7 +231,7 @@ describe('WorkBuddy Host settings integration', () => {
     // not reachable through the CN provider, and vice versa. A shared fallback
     // list would misdescribe one of them (different rates, windows, and
     // declared efforts).
-    const cn = (await ctx.llm.listModels('workbuddy')).map(model => model.id)
+    const cn = (await ctx.llm.listModels('codebuddy')).map(model => model.id)
     const ai = (await ctx.llm.listModels('workbuddy-ai')).map(model => model.id)
     expect(cn).toContain('minimax-m3')
     expect(ai).not.toContain('minimax-m3')
@@ -257,17 +257,17 @@ describe('WorkBuddy Host settings integration', () => {
     await ctx.plugin(WorkBuddy, {})
 
     await vi.waitFor(() => {
-      expect(ctx.llm.listProviders().map(provider => provider.id)).toContain('workbuddy')
+      expect(ctx.llm.listProviders().map(provider => provider.id)).toContain('codebuddy')
     })
     await vi.waitFor(async () => {
-      expect(await ctx.llm.listModels('workbuddy')).toEqual([])
+      expect(await ctx.llm.listModels('codebuddy')).toEqual([])
     })
     expect(await ctx.llm.listModels('workbuddy-ai')).toEqual([])
 
     // The provider directory entry survives: the group is hidden by having no
     // models, not by unregistering, so a later sign-in needs no restart.
     expect(ctx.llm.listConfigurableProviders().map(entry => entry.provider))
-      .toEqual(expect.arrayContaining(['workbuddy', 'workbuddy-ai']))
+      .toEqual(expect.arrayContaining(['codebuddy', 'workbuddy-ai']))
     // And the settings card is still there to explain how to sign in.
     expect(ctx.settings.describe().find(entry => entry.ns === WorkBuddy.WORKBUDDY_SETTINGS_NS)).toBeDefined()
   })

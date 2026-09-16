@@ -21,7 +21,7 @@ import type { WorkBuddyShim } from './shim.ts'
 import { normalizeCredits } from './upstream.ts'
 
 /** Provider route this bundle owns. */
-export const WORKBUDDY_PROVIDER = 'workbuddy'
+export const WORKBUDDY_PROVIDER = 'codebuddy'
 
 /** Provider idle ceiling while one stream read is outstanding. */
 export const WORKBUDDY_STREAM_IDLE_TIMEOUT_MS = 300_000

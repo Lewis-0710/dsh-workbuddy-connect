@@ -56,7 +56,7 @@ describe('Composer model probe', () => {
 
   beforeEach(() => {
     probeStatus()
-    select('workbuddy', 'glm-5.2')
+    select('codebuddy', 'glm-5.2')
     request.mockReset().mockImplementation(async (_url: string, init?: RequestInit) => {
       if (init?.method !== 'POST') return { ok: true, json: async () => statusBody }
       // A successful probe writes a result that the next status read reports,
@@ -112,7 +112,7 @@ describe('Composer model probe', () => {
   })
 
   it('hides declared or non-candidate models', async () => {
-    select('workbuddy', 'glm-5.3')
+    select('codebuddy', 'glm-5.3')
     await mount()
     expect(view?.toJSON()).toBeNull()
   })
@@ -200,8 +200,8 @@ describe('Composer model probe', () => {
     })
     await mount()
     expect(buttonLabels()).not.toContain(en.probeNoteDismiss)
-    await act(async () => { select('workbuddy', 'auto') })
-    await act(async () => { select('workbuddy', 'glm-5.2') })
+    await act(async () => { select('codebuddy', 'auto') })
+    await act(async () => { select('codebuddy', 'glm-5.2') })
     // Switching is not a reason to repeat something already on record.
     expect(buttonLabels()).not.toContain(en.probeNoteDismiss)
   })
@@ -227,7 +227,7 @@ describe('Composer model probe', () => {
 
   it('confirms the newly selected model and sends only that id, without automatic consent', async () => {
     await mount()
-    await act(async () => { select('workbuddy', 'auto') })
+    await act(async () => { select('codebuddy', 'auto') })
     await act(async () => { button()[0]!.props.onClick() })
     const detect = button().find(node => node.children.join('') === en.probeConfirmAction)!
     await act(async () => { detect.props.onClick() })

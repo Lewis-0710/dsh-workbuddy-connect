@@ -123,7 +123,7 @@ async function boot(): Promise<Context> {
   await ctx.plugin(FakeWebServer)
   await ctx.plugin(WorkBuddy, {})
   await vi.waitFor(() => {
-    expect(ctx.llm.listProviders().map(provider => provider.id)).toContain('workbuddy')
+    expect(ctx.llm.listProviders().map(provider => provider.id)).toContain('codebuddy')
   })
   return ctx
 }
@@ -140,10 +140,10 @@ describe('catalog lifecycle', () => {
 
     const ctx = await boot()
     await vi.waitFor(async () => {
-      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['live-model'])
+      expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['live-model'])
     })
     // The upstream roster replaced the built-in fallback entirely.
-    expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).not.toContain('minimax-m3')
+    expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).not.toContain('minimax-m3')
   })
 
   it('keeps the fallback roster and retries after a failed fetch', async () => {
@@ -167,15 +167,15 @@ describe('catalog lifecycle', () => {
     // The failed fetch leaves the per-variant fallback serving: the group is
     // visible and usable rather than empty.
     await vi.waitFor(async () => {
-      expect((await ctx.llm.listModels('workbuddy')).length).toBeGreaterThan(0)
+      expect((await ctx.llm.listModels('codebuddy')).length).toBeGreaterThan(0)
     })
-    expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toContain('minimax-m3')
+    expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toContain('minimax-m3')
     expect(attempts).toBeGreaterThanOrEqual(1)
 
     // Without the retry this stayed on the fallback list until a manual
     // refresh — a startup network blip should not require user action.
     await vi.waitFor(async () => {
-      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['recovered-model'])
+      expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['recovered-model'])
     }, { timeout: 10_000 })
   })
 
@@ -191,14 +191,14 @@ describe('catalog lifecycle', () => {
 
     const ctx = await boot()
     await vi.waitFor(async () => {
-      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['live-model'])
+      expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['live-model'])
     })
     const afterFirst = request.mock.calls.length
     // Several sweeps' worth of time at the module's 30s interval would be too
     // slow to wait for here; instead assert the invariant that matters — a
     // successful fetch is not repeated for the same identity — by reading the
     // catalog repeatedly, which is what a sweep's early-return guards.
-    for (let index = 0; index < 5; index += 1) await ctx.llm.listModels('workbuddy')
+    for (let index = 0; index < 5; index += 1) await ctx.llm.listModels('codebuddy')
     expect(request.mock.calls.length).toBe(afterFirst)
   })
 
@@ -213,19 +213,19 @@ describe('catalog lifecycle', () => {
 
     const ctx = await boot()
     await vi.waitFor(async () => {
-      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['live-model'])
+      expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['live-model'])
     })
 
     // Signing out (file removed) must remove the group, not leave it pickable.
     await rm(cnFile)
     await vi.waitFor(async () => {
-      expect(await ctx.llm.listModels('workbuddy')).toEqual([])
+      expect(await ctx.llm.listModels('codebuddy')).toEqual([])
     }, { timeout: 20_000 })
 
     // Signing back in restores it: the provider stayed registered throughout.
     await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-a'))
     await vi.waitFor(async () => {
-      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['live-model'])
+      expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['live-model'])
     }, { timeout: 20_000 })
   }, 45_000)
 
@@ -247,13 +247,13 @@ describe('catalog lifecycle', () => {
 
     const ctx = await boot()
     await vi.waitFor(async () => {
-      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['account-a-model'])
+      expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['account-a-model'])
     })
 
     // Switch the desktop app's account in place.
     await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-b'))
     await vi.waitFor(async () => {
-      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['account-b-model'])
+      expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['account-b-model'])
     }, { timeout: 20_000 })
   }, 45_000)
 
@@ -319,7 +319,7 @@ describe('catalog lifecycle', () => {
 
     const ctx = await boot()
     await vi.waitFor(async () => {
-      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['acct-a-model'])
+      expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['acct-a-model'])
     })
 
     const routes = FakeWebServer.current!.routes
@@ -352,7 +352,7 @@ describe('catalog lifecycle', () => {
     expect(after.probe.results).toEqual([])
     expect(after.catalog.source).toBe('fallback')
     expect(String(after.catalog.error)).toMatch(/503|upstream/i)
-    const serving = (await ctx.llm.listModels('workbuddy')).map(model => model.id)
+    const serving = (await ctx.llm.listModels('codebuddy')).map(model => model.id)
     expect(serving).not.toContain('acct-a-model')
     expect(serving).toContain('minimax-m3')
 
@@ -362,7 +362,7 @@ describe('catalog lifecycle', () => {
     const ok = await post('/plugins/dsh-workbuddy-connect/probe', key, { action: 'refresh' })
     expect(await ok.json()).toMatchObject({ state: 'refreshed' })
     await vi.waitFor(async () => {
-      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['acct-b-model'])
+      expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['acct-b-model'])
     })
   }, 45_000)
 })
@@ -387,7 +387,7 @@ describe('saved catalog', () => {
     vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(catalogEnvelope('saved-model', 'Saved'))))
     const first = await boot()
     await vi.waitFor(async () => {
-      expect((await first.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['saved-model'])
+      expect((await first.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['saved-model'])
     }, { timeout: 10_000 })
     // Let the write land before the process is torn down.
     await new Promise(resolve => setTimeout(resolve, 300))
@@ -398,7 +398,7 @@ describe('saved catalog', () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline') }))
     const second = await boot()
     await vi.waitFor(async () => {
-      expect((await second.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['saved-model'])
+      expect((await second.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['saved-model'])
     }, { timeout: 10_000 })
   }, 45_000)
 })
@@ -423,16 +423,16 @@ describe('identity changes during catalog loading', () => {
 
     const ctx = await boot()
     await vi.waitFor(async () => {
-      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['account-a-model'])
+      expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['account-a-model'])
     })
 
     await rm(cnFile)
-    await vi.waitFor(async () => { expect(await ctx.llm.listModels('workbuddy')).toEqual([]) })
+    await vi.waitFor(async () => { expect(await ctx.llm.listModels('codebuddy')).toEqual([]) })
 
     fail = true
     await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-b'))
     await vi.waitFor(async () => {
-      const ids = (await ctx.llm.listModels('workbuddy')).map(model => model.id)
+      const ids = (await ctx.llm.listModels('codebuddy')).map(model => model.id)
       expect(ids).not.toContain('account-a-model')
       expect(ids).toContain('minimax-m3')
     })
@@ -467,7 +467,7 @@ describe('identity changes during catalog loading', () => {
 
     await vi.waitFor(async () => {
       expect(calls).toBe(2)
-      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['account-b-model'])
+      expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['account-b-model'])
     })
     expect(aborted).toBe(true)
   }, 45_000)
@@ -498,7 +498,7 @@ describe('identity changes during catalog loading', () => {
 
     const ctx = await boot()
     await vi.waitFor(async () => {
-      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['account-b-model'])
+      expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['account-b-model'])
     })
     const saved = JSON.parse(await readFile(join(root, '.workbuddy-catalog.json'), 'utf8')) as { entries: Record<string, unknown> }
     expect(saved.entries['uid-a:ent-1']).toBeUndefined()
