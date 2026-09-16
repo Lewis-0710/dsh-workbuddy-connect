@@ -233,7 +233,7 @@ fi
 
 if [ "$DO_PUSH" = true ]; then
     echo "🚀 正在推送到 origin/custom..."
-    git push origin custom
+    git push --force-with-lease origin custom
     echo "✅ 已成功推送到 origin/custom"
 else
     echo "ℹ️  跳过远程推送（可稍后手动执行 git push origin custom）"

@@ -1,0 +1,777 @@
+diff --git a/README.md b/README.md
+index 48b34df..ce28cb9 100644
+--- a/README.md
++++ b/README.md
+@@ -1,3 +1,13 @@
++> [!NOTE]
++> **Fork 维护版本** | 本仓库是 [corrinehu/dsh-workbuddy-connect](https://github.com/corrinehu/dsh-workbuddy-connect) 的维护分支。
++> 
++> **与上游差异**：
++> 1. WorkBuddy → CodeBuddy 品牌重命名（provider ID、设置命名空间、显示名称）
++> 2. 设置项 ID 从 workbuddy 改为 codebuddy
++> 3. 适配 DSH 0.1.5+ 客户端包拆分
++> 
++> 详见 [sync.patch](./sync.patch)。
++
+ # DSH WorkBuddy Connect
+ 
+ 
+diff --git a/cordis.patch.yml b/cordis.patch.yml
+index 0f8c474..abd9de2 100644
+--- a/cordis.patch.yml
++++ b/cordis.patch.yml
+@@ -2,5 +2,5 @@
+ # default model. The plugin reuses the WorkBuddy desktop app's sign-in; no
+ # separate OAuth flow is started.
+ - insert:
+-    - id: llm-workbuddy
++    - id: llm-codebuddy
+       name: dsh-workbuddy-connect
+diff --git a/package.json b/package.json
+index 90ae00f..c927072 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "dsh-workbuddy-connect",
+-  "displayName": "DSH WorkBuddy Connect",
++  "displayName": "CodeBuddy",
+   "description": "将 WorkBuddy 桌面 App 包含的模型自动接入 DeepSeek Harness — bring WorkBuddy desktop app models into DeepSeek Harness with zero configuration.",
+   "version": "0.5.2",
+   "author": "corrinehu",
+@@ -62,7 +62,8 @@
+         "@deepseek-ai/dsh-client-ui-settings-plugins",
+         "@deepseek-ai/dsh-client-ui-conversation",
+         "@deepseek-ai/dsh-client-ui-model-selection",
+-        "@deepseek-ai/dsh-client-locale"
++        "@deepseek-ai/dsh-client-locale",
++        "@deepseek-ai/dsh-client-ui-primitives"
+       ],
+       "platform": "web"
+     }
+@@ -71,6 +72,7 @@
+     "@deepseek-ai/cordis": "^4.0.2",
+     "@deepseek-ai/dsh-atomic-write": "^0.1.5-rc.1",
+     "@deepseek-ai/dsh-attachment": "^0.1.5-rc.1",
++    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.5-rc.1",
+     "@deepseek-ai/dsh-home-paths": "^0.1.5-rc.1",
+     "@deepseek-ai/dsh-host-webserver": "^0.1.5-rc.1",
+     "@deepseek-ai/dsh-llm": "^0.1.5-rc.1",
+@@ -87,6 +89,7 @@
+     "@deepseek-ai/dsh-client-locale": "^0.1.5-rc.1",
+     "@deepseek-ai/dsh-client-ui-conversation": "0.1.5-rc.1",
+     "@deepseek-ai/dsh-client-ui-model-selection": "0.1.5-rc.1",
++    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.5-rc.1",
+     "@deepseek-ai/dsh-client-ui-renderer": "^0.1.5-rc.1",
+     "@deepseek-ai/dsh-client-ui-settings-plugins": "^0.1.5-rc.1",
+     "@deepseek-ai/dsh-client-ui-slots": "^0.1.5-rc.1",
+@@ -100,8 +103,11 @@
+     "@earendil-works/pi-ai": "^0.85.1",
+     "@types/node": "^22.20.0",
+     "@types/react": "~18.3.1",
++    "@types/react-dom": "~18.3.7",
+     "@types/react-test-renderer": "^18.3.1",
++    "clsx": "^2.1.1",
+     "react": "^18.2.0",
++    "react-dom": "^18.3.1",
+     "react-test-renderer": "18.3.1",
+     "tsdown": "^0.22.2",
+     "typescript": "^5.9.3",
+diff --git a/src/adapter.ts b/src/adapter.ts
+index 0200df8..04b5e40 100644
+--- a/src/adapter.ts
++++ b/src/adapter.ts
+@@ -21,7 +21,7 @@ import type { WorkBuddyShim } from './shim.ts'
+ import { normalizeCredits } from './upstream.ts'
+ 
+ /** Provider route this bundle owns. */
+-export const WORKBUDDY_PROVIDER = 'workbuddy'
++export const WORKBUDDY_PROVIDER = 'codebuddy'
+ 
+ /** Provider idle ceiling while one stream read is outstanding. */
+ export const WORKBUDDY_STREAM_IDLE_TIMEOUT_MS = 300_000
+diff --git a/src/client/WorkBuddyPluginCard.tsx b/src/client/WorkBuddyPluginCard.tsx
+index 721a55e..c714fd1 100644
+--- a/src/client/WorkBuddyPluginCard.tsx
++++ b/src/client/WorkBuddyPluginCard.tsx
+@@ -1,7 +1,8 @@
+ /** WorkBuddy status card contributed to Harness Plugin configuration. */
+ 
+-import { useCallback, useEffect, useRef, useState } from 'react'
++import { createElement as h, useCallback, useEffect, useRef, useState } from 'react'
+ import type { CSSProperties } from 'react'
++import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
+ import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+ import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
+ import { WORKBUDDY_AI_PROBE_PATH, WORKBUDDY_AI_STATUS_PATH, WORKBUDDY_PROBE_PATH, WORKBUDDY_STATUS_PATH } from '../status-paths.ts'
+@@ -37,7 +38,7 @@ export interface WorkBuddyCardVariant {
+ 
+ /** CN WorkBuddy; the plugin's long-standing card and default. */
+ export const CN_CARD_VARIANT: WorkBuddyCardVariant = {
+-  id: 'workbuddy',
++  id: 'codebuddy',
+   titleKey: 'title',
+   introKey: 'intro',
+   signedOutKey: 'signedOutHint',
+@@ -66,9 +67,9 @@ const POLL_INTERVAL_MS = 60_000
+ 
+ const cardStyle: CSSProperties = {
+   overflow: 'hidden',
+-  border: '1px solid var(--dsw-alias-border-l2)',
+-  borderRadius: 10,
+-  background: 'var(--dsw-alias-bg-module-platform)',
++  border: '1px solid var(--dsw-alias-border-l2, #36373b)',
++  borderRadius: 12,
++  background: 'var(--dsw-alias-bg-layer-3, #202126)',
+ }
+ const headerStyle: CSSProperties = {
+   boxSizing: 'border-box',
+@@ -76,19 +77,20 @@ const headerStyle: CSSProperties = {
+   display: 'flex',
+   alignItems: 'center',
+   justifyContent: 'space-between',
+-  gap: 16,
++  gap: 12,
+   border: 0,
+-  padding: '13px 14px',
++  borderRadius: 12,
++  padding: '14px 16px',
+   background: 'transparent',
+-  color: 'var(--dsw-alias-label-primary)',
++  color: 'inherit',
+   font: 'inherit',
+   textAlign: 'left',
+   cursor: 'pointer',
+ }
+-const headTextStyle: CSSProperties = { display: 'flex', minWidth: 0, flexDirection: 'column', gap: 3 }
+-const nameStyle: CSSProperties = { fontSize: 14, lineHeight: '20px', fontWeight: 600 }
+-const descriptionStyle: CSSProperties = { fontSize: 13, lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary)' }
+-const chevronStyle: CSSProperties = { flex: '0 0 auto', fontSize: 18, lineHeight: 1, transition: 'transform 120ms ease' }
++const headTextStyle: CSSProperties = { display: 'flex', minWidth: 0, flexDirection: 'column', gap: 4 }
++const nameStyle: CSSProperties = { color: 'var(--dsw-alias-label-primary, #e6e6e6)', fontSize: 15, lineHeight: 1.4, fontWeight: 600 }
++const descriptionStyle: CSSProperties = { color: 'var(--dsw-alias-label-tertiary, #999)', fontSize: 13, lineHeight: 1.5 }
++const chevronStyle: CSSProperties = { color: 'var(--dsw-alias-label-tertiary, #999)', flex: 'none', display: 'inline-flex', transition: 'transform .16s' }
+ const cardBodyStyle: CSSProperties = { borderTop: '1px solid var(--dsw-alias-border-l2)', padding: '16px 14px 18px' }
+ 
+ const bodyStyle: CSSProperties = { margin: 0, fontSize: 14, lineHeight: '22px', color: 'var(--dsw-alias-label-secondary)' }
+@@ -776,7 +778,9 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
+           <span style={nameStyle}>{title}</span>
+           <span style={descriptionStyle}>{t(variant.introKey)}</span>
+         </span>
+-        <span aria-hidden="true" style={{ ...chevronStyle, transform: open ? 'rotate(180deg)' : 'none' }}>⌄</span>
++        <span aria-hidden="true" style={{ ...chevronStyle, transform: open ? 'rotate(180deg)' : 'none' }}>
++          {h(IconChevronDownOutline14, { size: 14 })}
++        </span>
+       </button>
+       {open
+         ? <div style={cardBodyStyle}>
+diff --git a/src/client/index.tsx b/src/client/index.tsx
+index de06fea..adae705 100644
+--- a/src/client/index.tsx
++++ b/src/client/index.tsx
+@@ -16,7 +16,7 @@ import type { WorkBuddySettingsKey } from './locales.ts'
+ declare module '@deepseek-ai/dsh-client-ui-slots' {
+   interface LocaleNamespaceMap {
+     /** WorkBuddy plugin card copy. */
+-    'settings.workbuddy': WorkBuddySettingsKey
++    'settings.codebuddy': WorkBuddySettingsKey
+   }
+ }
+ 
+@@ -60,7 +60,7 @@ export const inject = ['slots', 'locale', 'remote', 'remote.session']
+  */
+ export function apply(ctx: ClientContext): void {
+   try {
+-    const namespace = 'settings.workbuddy'
++    const namespace = 'settings.codebuddy'
+     ctx.effect(() => ctx.locale.register(namespace, { zh, en }), 'dsh-workbuddy-connect: settings copy')
+     const t = ctx.locale.bind(namespace) as WorkBuddyPluginCardInjected['t']
+     // One card per variant. They show different accounts, balances, and model
+diff --git a/src/client/locales.ts b/src/client/locales.ts
+index e24b32b..a75465e 100644
+--- a/src/client/locales.ts
++++ b/src/client/locales.ts
+@@ -1,7 +1,7 @@
+ /** Plugin-card copy registered under the settings.workbuddy locale namespace. */
+ 
+ export const en = {
+-  title: 'DSH WorkBuddy Connect',
++  title: 'CodeBuddy',
+   intro: 'Use the models in the WorkBuddy desktop app directly in DSH — zero configuration, ready out of the box.',
+   titleAI: 'DSH WorkBuddy AI Connect',
+   introAI: 'Use the models in the WorkBuddy AI international desktop app directly in DSH — zero configuration, ready out of the box.',
+@@ -80,7 +80,7 @@ export const en = {
+ export type WorkBuddySettingsKey = keyof typeof en
+ 
+ export const zh: Record<WorkBuddySettingsKey, string> = {
+-  title: 'DSH WorkBuddy Connect',
++  title: 'CodeBuddy',
+   intro: '在 DSH 中直接使用 WorkBuddy 桌面 App 包含的模型，开箱即用，无需额外配置。',
+   titleAI: 'DSH WorkBuddy AI Connect',
+   introAI: '在 DSH 中直接使用 WorkBuddy AI 国际版桌面 App 包含的模型，开箱即用，无需额外配置。',
+diff --git a/src/host-heartbeat.ts b/src/host-heartbeat.ts
+index d7ee599..301fd23 100644
+--- a/src/host-heartbeat.ts
++++ b/src/host-heartbeat.ts
+@@ -18,7 +18,7 @@ import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+ import { WORKBUDDY_CONNECT_VERSION } from './version.ts'
+ 
+ /** Basename of the host heartbeat file inside the Harness home. */
+-export const WORKBUDDY_HOST_HEARTBEAT_FILENAME = '.workbuddy-host-heartbeat.json'
++export const WORKBUDDY_HOST_HEARTBEAT_FILENAME = '.codebuddy-host-heartbeat.json'
+ 
+ /** Current on-disk heartbeat format; readers reject others. */
+ const HEARTBEAT_FORMAT_VERSION = 1
+diff --git a/src/index.ts b/src/index.ts
+index 3751e29..d02c064 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -151,7 +151,7 @@ export const inject = ['llm']
+  * into this package (upstream DSH plugins, `dsh-llm-pi-ai` included, pass
+  * their namespaces as plain string literals).
+  */
+-export const WORKBUDDY_SETTINGS_NS = 'workbuddy' as SettingsNamespace
++export const WORKBUDDY_SETTINGS_NS = 'codebuddy' as SettingsNamespace
+ 
+ /**
+  * Settings namespace owning the international card's section.
+diff --git a/src/status-paths.ts b/src/status-paths.ts
+index 1fb9922..f6a32f2 100644
+--- a/src/status-paths.ts
++++ b/src/status-paths.ts
+@@ -156,6 +156,8 @@ export type WorkBuddyWebStatus =
+      * The card renders it in place of the generic sign-in hint.
+      */
+     reason?: string
++    /** Where those models came from, even when signed out. */
++    catalog?: WorkBuddyWebCatalog
+   }
+   | {
+     status: 'signed-in'
+diff --git a/src/variants.ts b/src/variants.ts
+index d5af401..97a00f7 100644
+--- a/src/variants.ts
++++ b/src/variants.ts
+@@ -53,9 +53,9 @@ export interface WorkBuddyVariant {
+ /** CN WorkBuddy first: the existing provider keeps its id, paths, and copy. */
+ export const WORKBUDDY_VARIANTS: readonly WorkBuddyVariant[] = [
+   {
+-    id: 'workbuddy',
+-    displayName: 'WorkBuddy',
+-    appName: 'WorkBuddy',
++    id: 'codebuddy',
++    displayName: 'CodeBuddy',
++    appName: 'CodeBuddy',
+     region: 'cn',
+     env: 'WORKBUDDY_AUTH_FILE',
+     desktopFilename: 'workbuddy-desktop.info',
+diff --git a/src/web-status.ts b/src/web-status.ts
+index 9f98822..76e5c59 100644
+--- a/src/web-status.ts
++++ b/src/web-status.ts
+@@ -82,9 +82,11 @@ export async function workBuddyWebStatus(
+     // A diagnosable sign-out (a credential for the *other* product) keeps its
+     // explanation: falling back to the generic hint would tell the user to sign
+     // in when the real fix is to correct a path.
++    const catalog = deps.catalog?.()
+     return {
+       status: 'signed-out',
+       ...authStatus.reason === undefined ? {} : { reason: authStatus.reason },
++      ...catalog === undefined ? {} : { catalog },
+     }
+   }
+   const status: WorkBuddyWebStatus = {
+diff --git a/tests/catalog-lifecycle.spec.ts b/tests/catalog-lifecycle.spec.ts
+index 67bd633..6c8d387 100644
+--- a/tests/catalog-lifecycle.spec.ts
++++ b/tests/catalog-lifecycle.spec.ts
+@@ -123,7 +123,7 @@ async function boot(): Promise<Context> {
+   await ctx.plugin(FakeWebServer)
+   await ctx.plugin(WorkBuddy, {})
+   await vi.waitFor(() => {
+-    expect(ctx.llm.listProviders().map(provider => provider.id)).toContain('workbuddy')
++    expect(ctx.llm.listProviders().map(provider => provider.id)).toContain('codebuddy')
+   })
+   return ctx
+ }
+@@ -140,10 +140,10 @@ describe('catalog lifecycle', () => {
+ 
+     const ctx = await boot()
+     await vi.waitFor(async () => {
+-      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['live-model'])
++      expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['live-model'])
+     })
+     // The upstream roster replaced the built-in fallback entirely.
+-    expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).not.toContain('minimax-m3')
++    expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).not.toContain('minimax-m3')
+   })
+ 
+   it('keeps the fallback roster and retries after a failed fetch', async () => {
+@@ -167,15 +167,15 @@ describe('catalog lifecycle', () => {
+     // The failed fetch leaves the per-variant fallback serving: the group is
+     // visible and usable rather than empty.
+     await vi.waitFor(async () => {
+-      expect((await ctx.llm.listModels('workbuddy')).length).toBeGreaterThan(0)
++      expect((await ctx.llm.listModels('codebuddy')).length).toBeGreaterThan(0)
+     })
+-    expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toContain('minimax-m3')
++    expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toContain('minimax-m3')
+     expect(attempts).toBeGreaterThanOrEqual(1)
+ 
+     // Without the retry this stayed on the fallback list until a manual
+     // refresh — a startup network blip should not require user action.
+     await vi.waitFor(async () => {
+-      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['recovered-model'])
++      expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['recovered-model'])
+     }, { timeout: 10_000 })
+   })
+ 
+@@ -191,14 +191,14 @@ describe('catalog lifecycle', () => {
+ 
+     const ctx = await boot()
+     await vi.waitFor(async () => {
+-      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['live-model'])
++      expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['live-model'])
+     })
+     const afterFirst = request.mock.calls.length
+     // Several sweeps' worth of time at the module's 30s interval would be too
+     // slow to wait for here; instead assert the invariant that matters — a
+     // successful fetch is not repeated for the same identity — by reading the
+     // catalog repeatedly, which is what a sweep's early-return guards.
+-    for (let index = 0; index < 5; index += 1) await ctx.llm.listModels('workbuddy')
++    for (let index = 0; index < 5; index += 1) await ctx.llm.listModels('codebuddy')
+     expect(request.mock.calls.length).toBe(afterFirst)
+   })
+ 
+@@ -213,19 +213,19 @@ describe('catalog lifecycle', () => {
+ 
+     const ctx = await boot()
+     await vi.waitFor(async () => {
+-      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['live-model'])
++      expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['live-model'])
+     })
+ 
+     // Signing out (file removed) must remove the group, not leave it pickable.
+     await rm(cnFile)
+     await vi.waitFor(async () => {
+-      expect(await ctx.llm.listModels('workbuddy')).toEqual([])
++      expect(await ctx.llm.listModels('codebuddy')).toEqual([])
+     }, { timeout: 20_000 })
+ 
+     // Signing back in restores it: the provider stayed registered throughout.
+     await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-a'))
+     await vi.waitFor(async () => {
+-      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['live-model'])
++      expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['live-model'])
+     }, { timeout: 20_000 })
+   }, 45_000)
+ 
+@@ -247,13 +247,13 @@ describe('catalog lifecycle', () => {
+ 
+     const ctx = await boot()
+     await vi.waitFor(async () => {
+-      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['account-a-model'])
++      expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['account-a-model'])
+     })
+ 
+     // Switch the desktop app's account in place.
+     await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-b'))
+     await vi.waitFor(async () => {
+-      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['account-b-model'])
++      expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['account-b-model'])
+     }, { timeout: 20_000 })
+   }, 45_000)
+ 
+@@ -319,7 +319,7 @@ describe('catalog lifecycle', () => {
+ 
+     const ctx = await boot()
+     await vi.waitFor(async () => {
+-      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['acct-a-model'])
++      expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['acct-a-model'])
+     })
+ 
+     const routes = FakeWebServer.current!.routes
+@@ -352,7 +352,7 @@ describe('catalog lifecycle', () => {
+     expect(after.probe.results).toEqual([])
+     expect(after.catalog.source).toBe('fallback')
+     expect(String(after.catalog.error)).toMatch(/503|upstream/i)
+-    const serving = (await ctx.llm.listModels('workbuddy')).map(model => model.id)
++    const serving = (await ctx.llm.listModels('codebuddy')).map(model => model.id)
+     expect(serving).not.toContain('acct-a-model')
+     expect(serving).toContain('minimax-m3')
+ 
+@@ -362,7 +362,7 @@ describe('catalog lifecycle', () => {
+     const ok = await post('/plugins/dsh-workbuddy-connect/probe', key, { action: 'refresh' })
+     expect(await ok.json()).toMatchObject({ state: 'refreshed' })
+     await vi.waitFor(async () => {
+-      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['acct-b-model'])
++      expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['acct-b-model'])
+     })
+   }, 45_000)
+ })
+@@ -387,7 +387,7 @@ describe('saved catalog', () => {
+     vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(catalogEnvelope('saved-model', 'Saved'))))
+     const first = await boot()
+     await vi.waitFor(async () => {
+-      expect((await first.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['saved-model'])
++      expect((await first.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['saved-model'])
+     }, { timeout: 10_000 })
+     // Let the write land before the process is torn down.
+     await new Promise(resolve => setTimeout(resolve, 300))
+@@ -398,7 +398,7 @@ describe('saved catalog', () => {
+     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline') }))
+     const second = await boot()
+     await vi.waitFor(async () => {
+-      expect((await second.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['saved-model'])
++      expect((await second.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['saved-model'])
+     }, { timeout: 10_000 })
+   }, 45_000)
+ })
+@@ -423,16 +423,16 @@ describe('identity changes during catalog loading', () => {
+ 
+     const ctx = await boot()
+     await vi.waitFor(async () => {
+-      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['account-a-model'])
++      expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['account-a-model'])
+     })
+ 
+     await rm(cnFile)
+-    await vi.waitFor(async () => { expect(await ctx.llm.listModels('workbuddy')).toEqual([]) })
++    await vi.waitFor(async () => { expect(await ctx.llm.listModels('codebuddy')).toEqual([]) })
+ 
+     fail = true
+     await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-b'))
+     await vi.waitFor(async () => {
+-      const ids = (await ctx.llm.listModels('workbuddy')).map(model => model.id)
++      const ids = (await ctx.llm.listModels('codebuddy')).map(model => model.id)
+       expect(ids).not.toContain('account-a-model')
+       expect(ids).toContain('minimax-m3')
+     })
+@@ -467,7 +467,7 @@ describe('identity changes during catalog loading', () => {
+ 
+     await vi.waitFor(async () => {
+       expect(calls).toBe(2)
+-      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['account-b-model'])
++      expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['account-b-model'])
+     })
+     expect(aborted).toBe(true)
+   }, 45_000)
+@@ -498,7 +498,7 @@ describe('identity changes during catalog loading', () => {
+ 
+     const ctx = await boot()
+     await vi.waitFor(async () => {
+-      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['account-b-model'])
++      expect((await ctx.llm.listModels('codebuddy')).map(model => model.id)).toEqual(['account-b-model'])
+     })
+     const saved = JSON.parse(await readFile(join(root, '.workbuddy-catalog.json'), 'utf8')) as { entries: Record<string, unknown> }
+     expect(saved.entries['uid-a:ent-1']).toBeUndefined()
+diff --git a/tests/client-defects.spec.ts b/tests/client-defects.spec.ts
+index 8926caa..50f8ea3 100644
+--- a/tests/client-defects.spec.ts
++++ b/tests/client-defects.spec.ts
+@@ -516,7 +516,7 @@ describe('WorkBuddyProbeControl', () => {
+   } as WorkBuddyProbeControlProps['directory']
+ 
+   beforeEach(() => {
+-    state = { current: { provider: 'workbuddy', model: 'glm-5.2' }, status: 'ready', groups: [], failures: [], error: null, routable: true }
++    state = { current: { provider: 'codebuddy', model: 'glm-5.2' }, status: 'ready', groups: [], failures: [], error: null, routable: true }
+   })
+ 
+   afterEach(() => {
+diff --git a/tests/client-variants.spec.ts b/tests/client-variants.spec.ts
+index 0efc15e..319e86f 100644
+--- a/tests/client-variants.spec.ts
++++ b/tests/client-variants.spec.ts
+@@ -27,7 +27,7 @@ const t = (key: keyof typeof en, params: Record<string, unknown> = {}): string =
+ describe('card variants', () => {
+   it('exposes one card per provider, with distinct routes and copy', () => {
+     expect(CARD_VARIANTS).toHaveLength(2)
+-    expect(CARD_VARIANTS.map(card => card.id)).toEqual(['workbuddy', 'workbuddy-ai'])
++    expect(CARD_VARIANTS.map(card => card.id)).toEqual(['codebuddy', 'workbuddy-ai'])
+     const routes = CARD_VARIANTS.map(card => `${card.statusPath}|${card.probePath}`)
+     expect(new Set(routes).size).toBe(2)
+     // Distinct title/intro/hint keys, so one product's copy cannot appear as the
+@@ -38,7 +38,7 @@ describe('card variants', () => {
+   })
+ 
+   it('routes each provider id to its own card and nothing else', () => {
+-    expect(cardVariantFor('workbuddy')).toBe(CN_CARD_VARIANT)
++    expect(cardVariantFor('codebuddy')).toBe(CN_CARD_VARIANT)
+     expect(cardVariantFor('workbuddy-ai')).toBe(AI_CARD_VARIANT)
+     // Any other provider resolves to no card, which is what keeps the composer
+     // entry off non-WorkBuddy models.
+@@ -53,7 +53,7 @@ describe('card variants', () => {
+       expect(zh[card.signedOutKey]).toBeTruthy()
+       // The two titles must actually differ in each language, not just be
+       // distinct keys with identical text.
+-      expect(zh[card.titleKey]).toContain(card.id === 'workbuddy-ai' ? 'AI' : 'WorkBuddy')
++      expect(zh[card.titleKey]).toContain(card.id === 'workbuddy-ai' ? 'AI' : 'CodeBuddy')
+     }
+     expect(zh.titleAI).not.toBe(zh.title)
+     expect(en.titleAI).not.toBe(en.title)
+@@ -154,7 +154,7 @@ describe('composer control provider routing', () => {
+       probeKey: 'test-key',
+       probe: { consent: true, running: false, candidates: ['glm-5.2'], results: [] },
+     }
+-    select('workbuddy', 'glm-5.2')
++    select('codebuddy', 'glm-5.2')
+     request.mockReset().mockImplementation(async () => ({ ok: true, json: async () => statusBody }))
+     vi.stubGlobal('fetch', request)
+     vi.stubGlobal('window', {
+diff --git a/tests/mocks/primitives.ts b/tests/mocks/primitives.ts
+new file mode 100644
+index 0000000..602d96d
+--- /dev/null
++++ b/tests/mocks/primitives.ts
+@@ -0,0 +1,4 @@
++import { createElement } from 'react'
++
++export const IconChevronDownOutline14 = (props: { size?: number; className?: string }) =>
++  createElement('span', { 'data-icon': 'chevron-down', ...props }, '⌄')
+diff --git a/tests/probe-composer.spec.ts b/tests/probe-composer.spec.ts
+index dcad925..771a0fd 100644
+--- a/tests/probe-composer.spec.ts
++++ b/tests/probe-composer.spec.ts
+@@ -56,7 +56,7 @@ describe('Composer model probe', () => {
+ 
+   beforeEach(() => {
+     probeStatus()
+-    select('workbuddy', 'glm-5.2')
++    select('codebuddy', 'glm-5.2')
+     request.mockReset().mockImplementation(async (_url: string, init?: RequestInit) => {
+       if (init?.method !== 'POST') return { ok: true, json: async () => statusBody }
+       // A successful probe writes a result that the next status read reports,
+@@ -112,7 +112,7 @@ describe('Composer model probe', () => {
+   })
+ 
+   it('hides declared or non-candidate models', async () => {
+-    select('workbuddy', 'glm-5.3')
++    select('codebuddy', 'glm-5.3')
+     await mount()
+     expect(view?.toJSON()).toBeNull()
+   })
+@@ -200,8 +200,8 @@ describe('Composer model probe', () => {
+     })
+     await mount()
+     expect(buttonLabels()).not.toContain(en.probeNoteDismiss)
+-    await act(async () => { select('workbuddy', 'auto') })
+-    await act(async () => { select('workbuddy', 'glm-5.2') })
++    await act(async () => { select('codebuddy', 'auto') })
++    await act(async () => { select('codebuddy', 'glm-5.2') })
+     // Switching is not a reason to repeat something already on record.
+     expect(buttonLabels()).not.toContain(en.probeNoteDismiss)
+   })
+@@ -227,7 +227,7 @@ describe('Composer model probe', () => {
+ 
+   it('confirms the newly selected model and sends only that id, without automatic consent', async () => {
+     await mount()
+-    await act(async () => { select('workbuddy', 'auto') })
++    await act(async () => { select('codebuddy', 'auto') })
+     await act(async () => { button()[0]!.props.onClick() })
+     const detect = button().find(node => node.children.join('') === en.probeConfirmAction)!
+     await act(async () => { detect.props.onClick() })
+diff --git a/tests/reasoning-merge.spec.ts b/tests/reasoning-merge.spec.ts
+index ac3aa89..cdc56c8 100644
+--- a/tests/reasoning-merge.spec.ts
++++ b/tests/reasoning-merge.spec.ts
+@@ -76,14 +76,14 @@ async function boot(options: {
+   await ctx.plugin(LlmRuntime)
+   await ctx.plugin(WorkBuddy, {})
+   await vi.waitFor(() => {
+-    expect(ctx.llm.listProviders().map(provider => provider.id)).toContain('workbuddy')
++    expect(ctx.llm.listProviders().map(provider => provider.id)).toContain('codebuddy')
+   })
+   return ctx
+ }
+ 
+ /** The resolved efforts for one model, sorted, or undefined when none exist. */
+ async function effortsFor(ctx: Context, modelId: string): Promise<string[] | undefined> {
+-  const resolved = await ctx.llm.resolveModelInfo('workbuddy', modelId)
++  const resolved = await ctx.llm.resolveModelInfo('codebuddy', modelId)
+   return resolved.reasoning?.efforts.map(effort => effort.id).sort()
+ }
+ 
+diff --git a/tests/settings-integration.spec.ts b/tests/settings-integration.spec.ts
+index 0fb6705..1848f7e 100644
+--- a/tests/settings-integration.spec.ts
++++ b/tests/settings-integration.spec.ts
+@@ -67,12 +67,12 @@ describe('WorkBuddy Host settings integration', () => {
+ 
+     // Registration rides on the loopback shim's listening event.
+     await vi.waitFor(() => {
+-      expect(ctx.llm.listProviders().map(provider => provider.id)).toContain('workbuddy')
++      expect(ctx.llm.listProviders().map(provider => provider.id)).toContain('codebuddy')
+     })
+     expect(ctx.llm.listConfigurableProviders()).toContainEqual({
+-      provider: 'workbuddy',
+-      displayName: 'WorkBuddy',
+-      settingsNs: 'workbuddy',
++      provider: 'codebuddy',
++      displayName: 'CodeBuddy',
++      settingsNs: 'codebuddy',
+       settingsPath: [],
+       declared: false,
+     })
+@@ -81,7 +81,7 @@ describe('WorkBuddy Host settings integration', () => {
+     const descriptor = ctx.settings.describe().find(entry => entry.ns === WorkBuddy.WORKBUDDY_SETTINGS_NS)
+     expect(descriptor).toBeDefined()
+ 
+-    const models = await ctx.llm.listModels('workbuddy')
++    const models = await ctx.llm.listModels('codebuddy')
+     expect(models.map(model => model.id)).toContain('auto')
+     expect(models.map(model => model.id)).toContain('deepseek-v4-pro')
+     // The fallback catalog tracks the live `cli` roster, including the newer
+@@ -107,9 +107,9 @@ describe('WorkBuddy Host settings integration', () => {
+     // list (the older `{effort, summary}` shape) expose no control at all, so
+     // requests never carry `reasoning_effort` for them and the upstream
+     // default applies — matching the desktop app's own per-model gating.
+-    const autoResolved = await ctx.llm.resolveModelInfo('workbuddy', 'auto')
++    const autoResolved = await ctx.llm.resolveModelInfo('codebuddy', 'auto')
+     expect(autoResolved.reasoning).toBeUndefined()
+-    const flashResolved = await ctx.llm.resolveModelInfo('workbuddy', 'glm-5.3-flash')
++    const flashResolved = await ctx.llm.resolveModelInfo('codebuddy', 'glm-5.3-flash')
+     expect(flashResolved.reasoning?.efforts.map(effort => effort.id).sort()).toEqual(['high', 'low', 'max', 'off'])
+ 
+     // Image modalities follow the per-model catalog flag (fallback list here):
+@@ -155,7 +155,7 @@ describe('WorkBuddy Host settings integration', () => {
+ 
+     await vi.waitFor(() => {
+       expect(ctx.llm.listProviders().map(provider => provider.id)).toEqual(
+-        expect.arrayContaining(['workbuddy', 'workbuddy-ai']),
++        expect.arrayContaining(['codebuddy', 'workbuddy-ai']),
+       )
+     })
+ 
+@@ -164,7 +164,7 @@ describe('WorkBuddy Host settings integration', () => {
+     // page resolves `settingsNs` against served sections, so a shared ns would
+     // render both providers onto one card.
+     expect(ctx.llm.listConfigurableProviders()).toEqual(expect.arrayContaining([
+-      { provider: 'workbuddy', displayName: 'WorkBuddy', settingsNs: 'workbuddy', settingsPath: [], declared: false },
++      { provider: 'codebuddy', displayName: 'CodeBuddy', settingsNs: 'codebuddy', settingsPath: [], declared: false },
+       { provider: 'workbuddy-ai', displayName: 'WorkBuddy AI', settingsNs: 'workbuddy-ai', settingsPath: [], declared: false },
+     ]))
+ 
+@@ -189,8 +189,8 @@ describe('WorkBuddy Host settings integration', () => {
+       const root = (descriptor?.schema as { refs?: Record<string, { dict?: Record<string, unknown> }>, uid?: string } | undefined)?.refs?.[String((descriptor?.schema as { uid?: number } | undefined)?.uid)]
+       return Object.keys(root?.dict ?? {})
+     }
+-    expect(fieldsOf('workbuddy')).toContain('authFile')
+-    expect(fieldsOf('workbuddy')).not.toContain('authFileAI')
++    expect(fieldsOf('codebuddy')).toContain('authFile')
++    expect(fieldsOf('codebuddy')).not.toContain('authFileAI')
+     expect(fieldsOf('workbuddy-ai')).toEqual(['authFileAI'])
+ 
+     // A write through one section must reach ONLY that variant's store. The
+@@ -213,7 +213,7 @@ describe('WorkBuddy Host settings integration', () => {
+     // of surfacing as a timeout. Two sweeps at the 100 ms interval above.
+     await new Promise(resolve => setTimeout(resolve, 400))
+     expect(await ctx.llm.listModels('workbuddy-ai')).toEqual([])
+-    expect((await ctx.llm.listModels('workbuddy')).length).toBeGreaterThan(0)
++    expect((await ctx.llm.listModels('codebuddy')).length).toBeGreaterThan(0)
+ 
+     // And the setting is genuinely read back through the merged config: putting
+     // a valid international file back restores the group.
+@@ -223,7 +223,7 @@ describe('WorkBuddy Host settings integration', () => {
+     }, { timeout: 10_000 })
+ 
+     await vi.waitFor(async () => {
+-      expect((await ctx.llm.listModels('workbuddy')).length).toBeGreaterThan(0)
++      expect((await ctx.llm.listModels('codebuddy')).length).toBeGreaterThan(0)
+       expect((await ctx.llm.listModels('workbuddy-ai')).length).toBeGreaterThan(0)
+     })
+ 
+@@ -231,7 +231,7 @@ describe('WorkBuddy Host settings integration', () => {
+     // not reachable through the CN provider, and vice versa. A shared fallback
+     // list would misdescribe one of them (different rates, windows, and
+     // declared efforts).
+-    const cn = (await ctx.llm.listModels('workbuddy')).map(model => model.id)
++    const cn = (await ctx.llm.listModels('codebuddy')).map(model => model.id)
+     const ai = (await ctx.llm.listModels('workbuddy-ai')).map(model => model.id)
+     expect(cn).toContain('minimax-m3')
+     expect(ai).not.toContain('minimax-m3')
+@@ -257,17 +257,17 @@ describe('WorkBuddy Host settings integration', () => {
+     await ctx.plugin(WorkBuddy, {})
+ 
+     await vi.waitFor(() => {
+-      expect(ctx.llm.listProviders().map(provider => provider.id)).toContain('workbuddy')
++      expect(ctx.llm.listProviders().map(provider => provider.id)).toContain('codebuddy')
+     })
+     await vi.waitFor(async () => {
+-      expect(await ctx.llm.listModels('workbuddy')).toEqual([])
++      expect(await ctx.llm.listModels('codebuddy')).toEqual([])
+     })
+     expect(await ctx.llm.listModels('workbuddy-ai')).toEqual([])
+ 
+     // The provider directory entry survives: the group is hidden by having no
+     // models, not by unregistering, so a later sign-in needs no restart.
+     expect(ctx.llm.listConfigurableProviders().map(entry => entry.provider))
+-      .toEqual(expect.arrayContaining(['workbuddy', 'workbuddy-ai']))
++      .toEqual(expect.arrayContaining(['codebuddy', 'workbuddy-ai']))
+     // And the settings card is still there to explain how to sign in.
+     expect(ctx.settings.describe().find(entry => entry.ns === WorkBuddy.WORKBUDDY_SETTINGS_NS)).toBeDefined()
+   })
+diff --git a/tests/slot-registration.spec.ts b/tests/slot-registration.spec.ts
+index e895651..b20fe7f 100644
+--- a/tests/slot-registration.spec.ts
++++ b/tests/slot-registration.spec.ts
+@@ -70,7 +70,7 @@ describe('settings.plugin.item holds both cards', () => {
+     // `options` — one cell each, which is what the settings page renders.
+     const cells = (core.entriesOfSlot as any)('settings.plugin.item') as { options: { key?: string } }[]
+     expect(cells).toHaveLength(2)
+-    expect(cells.map(cell => cell.options.key).sort()).toEqual(['workbuddy', 'workbuddy-ai'])
++    expect(cells.map(cell => cell.options.key).sort()).toEqual(['codebuddy', 'workbuddy-ai'])
+   })
+ 
+   it('rejects a duplicate key at the same priority, which is why priorities differ', () => {
+diff --git a/tests/variants.spec.ts b/tests/variants.spec.ts
+index 6a8e581..e57e42d 100644
+--- a/tests/variants.spec.ts
++++ b/tests/variants.spec.ts
+@@ -47,8 +47,8 @@ function storeFor(variant: typeof CN_VARIANT, desktopPath: string, ownPath: stri
+ describe('variant descriptors', () => {
+   it('keeps the CN provider byte-identical to its historical identity', () => {
+     // Existing installs, settings files, and status paths must not move.
+-    expect(CN_VARIANT.id).toBe('workbuddy')
+-    expect(CN_VARIANT.displayName).toBe('WorkBuddy')
++    expect(CN_VARIANT.id).toBe('codebuddy')
++    expect(CN_VARIANT.displayName).toBe('CodeBuddy')
+     expect(CN_VARIANT.env).toBe('WORKBUDDY_AUTH_FILE')
+     expect(CN_VARIANT.desktopFilename).toBe('workbuddy-desktop.info')
+     expect(CN_VARIANT.ownFilename).toBe('.workbuddy-auth.json')
+@@ -91,7 +91,7 @@ describe('variant descriptors', () => {
+   })
+ 
+   it('resolves a variant by provider id and nothing else', () => {
+-    expect(variantFor('workbuddy')).toBe(CN_VARIANT)
++    expect(variantFor('codebuddy')).toBe(CN_VARIANT)
+     expect(variantFor('workbuddy-ai')).toBe(AI_VARIANT)
+     expect(variantFor('workbuddy-ai-2')).toBeUndefined()
+     expect(variantFor('')).toBeUndefined()
+diff --git a/tsdown.config.ts b/tsdown.config.ts
+index de0c7fe..4891468 100644
+--- a/tsdown.config.ts
++++ b/tsdown.config.ts
+@@ -18,6 +18,7 @@ const CLIENT_EXTERNALS = [
+   '@deepseek-ai/dsh-client-runtime/client',
+   '@deepseek-ai/dsh-client-ui-slots',
+   '@deepseek-ai/dsh-client-locale/client',
++  '@deepseek-ai/dsh-client-ui-primitives',
+ ] as const
+ 
+ export default [
+diff --git a/vitest.config.ts b/vitest.config.ts
+index a501332..d83d2e4 100644
+--- a/vitest.config.ts
++++ b/vitest.config.ts
+@@ -10,6 +10,11 @@ export default defineConfig({
+   define: {
+     __DSH_WORKBUDDY_VERSION__: JSON.stringify(PACKAGE_VERSION),
+   },
++  resolve: {
++    alias: {
++      '@deepseek-ai/dsh-client-ui-primitives': new URL('./tests/mocks/primitives.ts', import.meta.url).pathname,
++    },
++  },
+   test: {
+     include: ['tests/**/*.spec.ts'],
+     environment: 'node',
