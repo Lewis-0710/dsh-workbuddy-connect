@@ -38,6 +38,12 @@ export interface WorkBuddyStatusRouteOptions {
   catalog?: () => WorkBuddyWebCatalog | undefined
   /** In-process key authorizing probe control writes. */
   probeKey?: string
+  /**
+   * In-process key authorizing sign-in writes. Minted separately from
+   * {@link WorkBuddyStatusRouteOptions.probeKey} because the two authorize
+   * different powers; a signed-out card needs only this one.
+   */
+  loginKey?: string
   /** International-card preference selecting larger declared context windows. */
   useMaximumContextWindow?: () => boolean
   /**
@@ -83,18 +89,23 @@ export async function workBuddyWebStatus(
   if (authStatus.state !== 'signed-in') {
     // A diagnosable sign-out (a credential for the *other* product) keeps its
     // explanation: falling back to the generic hint would tell the user to sign
-    // in when the real fix is to correct a path.
+    // in when the real fix is to correct a path. The sign-in key rides along so
+    // this card can offer the action that resolves the state.
     return {
       status: 'signed-out',
       ...authStatus.reason === undefined ? {} : { reason: authStatus.reason },
+      ...deps.loginKey === undefined ? {} : { loginKey: deps.loginKey },
     }
   }
   const status: WorkBuddyWebStatus = {
     status: 'signed-in',
     ...authStatus.nickname === undefined ? {} : { nickname: authStatus.nickname },
     ...authStatus.domain === undefined || authStatus.domain === '' ? {} : { domain: authStatus.domain },
-    ...authStatus.source === undefined ? {} : { source: authStatus.source },
+    ...authStatus.region === undefined ? {} : { region: authStatus.region },
     ...authStatus.expiresAtMs === undefined ? {} : { expiresAt: authStatus.expiresAtMs },
+    // Both arms carry the key: a signed-in card needs it for sign-out and for
+    // switching accounts, and omitting it here made both actions unreachable.
+    ...deps.loginKey === undefined ? {} : { loginKey: deps.loginKey },
   }
   // Model facts ride the signed-in document so the card can show rates,
   // promos, and context capacity without touching the Models picker. The rate

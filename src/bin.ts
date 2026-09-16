@@ -2,8 +2,10 @@
 /** Standalone status/diagnostics CLI for the dsh-workbuddy-connect bundle. */
 
 import { realpathSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
-import { WorkBuddyCredentialStore, workbuddyOwnAuthPath } from './auth.ts'
+import { WorkBuddyCredentialStore, WORKBUDDY_CREDENTIAL_SOURCE, workbuddyOwnAuthPath } from './auth.ts'
+import { WorkBuddyLoginClient, resolveLoginRegion } from './login.ts'
 import { WorkBuddyUpstreamClient } from './upstream.ts'
 import { FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS } from './catalog.ts'
 import { WORKBUDDY_CONNECT_VERSION } from './version.ts'
@@ -11,7 +13,7 @@ import { isHeartbeatProcessAlive, readHostHeartbeat, workbuddyHostHeartbeatPath 
 import { CN_VARIANT, variantFor, WORKBUDDY_VARIANTS, type WorkBuddyVariant } from './variants.ts'
 import { resolveAppVersion } from './app-version.ts'
 
-type Action = 'doctor' | 'logout' | 'status'
+type Action = 'doctor' | 'import' | 'login' | 'logout' | 'status'
 
 const JSON_SCHEMA_VERSION = 1
 
@@ -25,15 +27,22 @@ function safeMessage(error: unknown): string {
 
 function printHelp(): void {
   process.stdout.write([
-    'Usage: dsh-workbuddy-connect <doctor|status|logout> [--provider <id>] [--json]',
+    'Usage: dsh-workbuddy-connect <doctor|import|login|status|logout> [--provider <id>] [--json] [--file <path>]',
     '',
-    '  doctor   secret-free sign-in and environment diagnostics',
-    '  status   sign-in state, remaining WorkBuddy credit, and host-bundle health',
-    '  logout   remove the plugin-owned credential copy (the desktop app keeps its sign-in)',
+    '  doctor   secret-free environment diagnostics',
+    '  import   adopt a credential document you already have (see --file)',
+    '  login    sign in through the browser (prints a URL, then waits for it)',
+    '  status   sign-in state and remaining WorkBuddy credit',
+    '  logout   remove the stored credential',
     '',
-    '  --provider  which product to inspect; defaults to workbuddy',
+    '  --provider  which product to act on; defaults to workbuddy',
     `              one of: ${WORKBUDDY_VARIANTS.map(variant => variant.id).join(', ')}`,
     '  --json      emit one secret-free JSON document (doctor/status only)',
+    '  --file      credential document to import; "-" reads standard input',
+    '',
+    '  The import format is the workbuddy.json shape:',
+    '    {"auth":{"accessToken":"…","refreshToken":"…","expiresAt":<seconds>,"domain":"…"},',
+    '     "account":{"uid":"…","nickname":"…"},"region":"cn"|"global"}',
     '',
   ].join('\n'))
 }
@@ -64,7 +73,6 @@ function fallbackCount(variant: WorkBuddyVariant): number {
 async function doctor(jsonOutput: boolean, variant: WorkBuddyVariant): Promise<number> {
   const store = makeStore(variant)
   const status = await store.status()
-  const desktopPresent = await store.desktopFilePresent()
   const heartbeat = await readHostHeartbeat()
   const hostAlive = heartbeat !== undefined && isHeartbeatProcessAlive(heartbeat)
   // Only the international variant needs a UA, and reading it is how `doctor`
@@ -77,11 +85,8 @@ async function doctor(jsonOutput: boolean, variant: WorkBuddyVariant): Promise<n
     node: process.version,
     provider: variant.id,
     displayName: variant.displayName,
-    desktopAuthFile: {
-      path: store.desktopAuthPath() ?? `(no platform default; set ${variant.env})`,
-      present: desktopPresent,
-    },
-    ownAuthFile: ownAuthPath(variant),
+    realm: variant.region,
+    credentialFile: store.ownAuthPath(),
     ...appVersion === undefined ? {} : {
       catalogUserAgent: {
         version: appVersion.version,
@@ -98,9 +103,8 @@ async function doctor(jsonOutput: boolean, variant: WorkBuddyVariant): Promise<n
     signIn: status.state,
     fallbackModels: fallbackCount(variant),
     hints: [
-      ...status.state === 'signed-in' ? [] : [`Sign in once in the ${variant.appName} desktop app, then run status again.`],
-      ...desktopPresent ? [] : [`No ${variant.appName} desktop auth file at the expected path; set ${variant.env} if it lives elsewhere.`],
-      ...hostAlive ? [] : ['Host bundle not running in this DSH profile (or the process exited). The browser card and provider are unavailable until DSH starts the plugin.'],
+      ...status.state === 'signed-in' ? [] : [`Sign in with \`dsh-workbuddy-connect login --provider ${variant.id}\`, or from the plugin's settings card.`],
+      ...hostAlive ? [] : ['Host bundle not running in this DSH profile (or the process exited). The browser card is unavailable until DSH starts the plugin; the login command above still works.'],
     ],
   }
   if (jsonOutput) {
@@ -108,7 +112,8 @@ async function doctor(jsonOutput: boolean, variant: WorkBuddyVariant): Promise<n
   } else {
     process.stdout.write([
       `${variant.displayName} Connect ${WORKBUDDY_CONNECT_VERSION} on ${process.version}`,
-      `Desktop auth file: ${report.desktopAuthFile.present ? 'present' : 'missing'} (${report.desktopAuthFile.path})`,
+      `Realm: ${report.realm}`,
+      `Credential file: ${report.credentialFile}`,
       `Host bundle: ${hostAlive ? `running (pid ${heartbeat!.pid})` : heartbeat !== undefined ? 'stale heartbeat (process exited)' : 'not started'}`,
       `Sign-in state: ${report.signIn}`,
       `Static fallback models: ${report.fallbackModels}`,
@@ -117,7 +122,7 @@ async function doctor(jsonOutput: boolean, variant: WorkBuddyVariant): Promise<n
       '',
     ].join('\n'))
   }
-  return status.state === 'signed-in' && desktopPresent ? 0 : 1
+  return status.state === 'signed-in' ? 0 : 1
 }
 
 async function status(jsonOutput: boolean, variant: WorkBuddyVariant): Promise<number> {
@@ -159,7 +164,7 @@ async function status(jsonOutput: boolean, variant: WorkBuddyVariant): Promise<n
       ...expiresAt === undefined ? {} : { accessTokenExpires: expiresAt },
       ...authStatus.nickname === undefined ? {} : { nickname: authStatus.nickname },
       ...authStatus.domain === undefined || authStatus.domain === '' ? {} : { domain: authStatus.domain },
-      source: authStatus.source,
+      ...authStatus.region === undefined ? {} : { realm: authStatus.region },
       credits: credits?.total,
       ...credits?.unlimited === true ? { creditsUnlimited: true } : {},
       ...credits?.error === undefined ? {} : { creditsError: credits.error },
@@ -184,6 +189,122 @@ async function status(jsonOutput: boolean, variant: WorkBuddyVariant): Promise<n
   return 0
 }
 
+/** How often the login command re-polls the upstream while waiting for the browser. */
+const LOGIN_POLL_INTERVAL_MS = 2_000
+
+/** How long the login command waits for the browser before giving up. */
+const LOGIN_TIMEOUT_MS = 5 * 60 * 1000
+
+/**
+ * Adopt a credential document the user already has.
+ *
+ * This is the path for a credential obtained elsewhere — a `workbuddy.json`
+ * written by the sibling tooling, or one pulled off another machine — so the
+ * plugin never has to be the thing that obtained it. The document is validated
+ * before anything is written, and the summary deliberately reports facts about
+ * the credential (which product, which account, when it expires) rather than the
+ * credential itself.
+ *
+ * @param variant - which product to import for.
+ * @param file - the document's path, or `-` for standard input.
+ * @returns the process exit code.
+ */
+async function importCredential(variant: WorkBuddyVariant, file: string): Promise<number> {
+  const store = makeStore(variant)
+  let text: string
+  if (file === '-') {
+    text = await readStdin()
+  } else {
+    try {
+      text = await readFile(file, 'utf8')
+    } catch (error: unknown) {
+      process.stderr.write(`dsh-workbuddy-connect: cannot read ${file}: ${safeMessage(error)}\n`)
+      return 1
+    }
+  }
+  let credential
+  try {
+    credential = await store.importDocument(text)
+  } catch (error: unknown) {
+    process.stderr.write(`dsh-workbuddy-connect: import refused: ${safeMessage(error)}\n`)
+    return 1
+  }
+  const expires = credential.expiresAtMs > 0 ? new Date(credential.expiresAtMs).toISOString() : '(no expiry stated)'
+  process.stdout.write([
+    `${variant.displayName} Connect: imported ${credential.uid === '' ? 'an account' : `account ${credential.uid}`}`
+    + `${credential.nickname === undefined ? '' : ` (${credential.nickname})`}`,
+    `Credential file: ${store.ownAuthPath()}`,
+    `Realm: ${credential.region ?? variant.region}`,
+    `Access token expires: ${expires}`,
+    '',
+  ].join('\n'))
+  return 0
+}
+
+/** Read standard input to the end; used by `import --file -`. */
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = []
+  for await (const chunk of process.stdin) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string))
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+/**
+ * Sign in from the terminal.
+ *
+ * Prints the URL and polls until the browser half finishes. This exists for the
+ * environments the settings card cannot reach — a headless profile, a TUI, a
+ * machine where DSH is not running — so a user is never required to have the
+ * browser half working in order to obtain a credential.
+ *
+ * @param variant - which product to sign in to.
+ * @returns the process exit code.
+ */
+async function login(variant: WorkBuddyVariant): Promise<number> {
+  const store = makeStore(variant)
+  const client = new WorkBuddyLoginClient()
+  const attempt = await client.begin(variant.region)
+  process.stdout.write([
+    `Sign in to ${variant.displayName} by opening this URL in a browser:`,
+    '',
+    `  ${attempt.authUrl}`,
+    '',
+    `Waiting for the sign-in to complete (up to ${Math.round(LOGIN_TIMEOUT_MS / 60_000)} minutes)…`,
+    '',
+  ].join('\n'))
+  const deadline = Date.now() + LOGIN_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    const outcome = await client.poll(attempt)
+    if (outcome.status === 'complete') {
+      const region = resolveLoginRegion(variant.region, outcome.tokens.domain)
+      if (region !== variant.region) {
+        process.stderr.write(
+          `dsh-workbuddy-connect: this sign-in returned a ${region === 'cn' ? 'WorkBuddy (CN)' : 'WorkBuddy AI'} account,`
+          + ` which belongs to the other provider; run login with --provider ${region === 'cn' ? CN_VARIANT.id : 'workbuddy-ai'}\n`,
+        )
+        return 1
+      }
+      await store.save({
+        accessToken: outcome.tokens.accessToken,
+        refreshToken: outcome.tokens.refreshToken,
+        expiresAtMs: outcome.tokens.expiresInSec > 0 ? Date.now() + outcome.tokens.expiresInSec * 1000 : 0,
+        domain: outcome.tokens.domain,
+        uid: outcome.account.uid,
+        ...outcome.account.enterpriseId === undefined ? {} : { enterpriseId: outcome.account.enterpriseId },
+        ...outcome.account.nickname === undefined ? {} : { nickname: outcome.account.nickname },
+        source: WORKBUDDY_CREDENTIAL_SOURCE,
+      })
+      process.stdout.write(
+        `${variant.displayName} Connect: signed in${outcome.account.nickname === undefined ? '' : ` as ${outcome.account.nickname}`}`
+        + ` (credential stored at ${store.ownAuthPath()})\n`,
+      )
+      return 0
+    }
+    await new Promise(resolve => setTimeout(resolve, LOGIN_POLL_INTERVAL_MS))
+  }
+  process.stderr.write('dsh-workbuddy-connect: timed out waiting for the browser sign-in; run login again to get a fresh URL\n')
+  return 1
+}
+
 /** Execute one boot-free command. */
 export async function run(argv: readonly string[]): Promise<number> {
   if (argv.length === 0 || argv[0] === '--help' || argv[0] === '-h') {
@@ -191,17 +312,19 @@ export async function run(argv: readonly string[]): Promise<number> {
     return 0
   }
   const [rawAction, ...flags] = argv
-  const actions: readonly Action[] = ['doctor', 'logout', 'status']
+  const actions: readonly Action[] = ['doctor', 'import', 'login', 'logout', 'status']
   if (!actions.includes(rawAction as Action)) {
-    process.stderr.write(`dsh-workbuddy-connect: expected doctor, logout, or status; got ${JSON.stringify(rawAction)}\n`)
+    process.stderr.write(`dsh-workbuddy-connect: expected doctor, import, login, logout, or status; got ${JSON.stringify(rawAction)}\n`)
     return 1
   }
   const action = rawAction as Action
   const jsonOutput = flags.includes('--json')
 
   // `--provider <id>` (or `--provider=<id>`); absent means the CN provider, so
-  // every existing invocation keeps its behaviour.
+  // every existing invocation keeps its behaviour. `--file <path>` names the
+  // document to import.
   let providerId: string | undefined
+  let file: string | undefined
   const rest: string[] = []
   for (let index = 0; index < flags.length; index += 1) {
     const flag = flags[index]!
@@ -214,6 +337,15 @@ export async function run(argv: readonly string[]): Promise<number> {
       providerId = flag.slice('--provider='.length)
       continue
     }
+    if (flag === '--file') {
+      file = flags[index + 1]
+      index += 1
+      continue
+    }
+    if (flag.startsWith('--file=')) {
+      file = flag.slice('--file='.length)
+      continue
+    }
     rest.push(flag)
   }
   const variant = providerId === undefined ? CN_VARIANT : variantFor(providerId)
@@ -224,24 +356,35 @@ export async function run(argv: readonly string[]): Promise<number> {
     return 1
   }
   const unknown = rest.filter(flag => flag !== '--json')
-  if (unknown.length > 0 || (jsonOutput && action === 'logout')) {
+  if (unknown.length > 0 || (jsonOutput && action !== 'doctor' && action !== 'status')) {
     process.stderr.write(`dsh-workbuddy-connect: invalid options for ${action}: ${flags.join(' ')}\n`)
+    return 1
+  }
+  if (action === 'import' && file === undefined) {
+    process.stderr.write('dsh-workbuddy-connect: import needs --file <path> (or --file - for standard input)\n')
+    return 1
+  }
+  if (action !== 'import' && file !== undefined) {
+    process.stderr.write(`dsh-workbuddy-connect: --file applies to import, not ${action}\n`)
     return 1
   }
   try {
     switch (action) {
       case 'doctor':
         return await doctor(jsonOutput, variant)
+      case 'import':
+        return await importCredential(variant, file as string)
+      case 'login':
+        return await login(variant)
       case 'status':
         return await status(jsonOutput, variant)
       case 'logout': {
         const store = makeStore(variant)
-        // Only this variant's plugin-owned copy is removed: the desktop app's
-        // own sign-in is never touched, and the model group is not promised to
-        // disappear (the desktop file may still supply a credential).
+        // Only this variant's stored credential is removed, so signing out of
+        // one product never affects the other.
         await store.logout()
         process.stdout.write(
-          `${variant.displayName} Connect: removed ${store.ownAuthPath()}; the desktop app's sign-in is untouched\n`,
+          `${variant.displayName} Connect: signed out; removed ${store.ownAuthPath()}\n`,
         )
         return 0
       }

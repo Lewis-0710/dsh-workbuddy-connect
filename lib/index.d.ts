@@ -1,6 +1,7 @@
 import z from "@deepseek-ai/schemastery";
 import "@earendil-works/pi-ai";
 import { PiAiAdapter } from "@deepseek-ai/dsh-llm-pi-ai";
+import { IncomingMessage, ServerResponse } from "node:http";
 import { Context } from "@deepseek-ai/cordis";
 import { SettingsNamespace } from "@deepseek-ai/dsh-settings";
 import { AttachmentStore } from "@deepseek-ai/dsh-attachment";
@@ -348,15 +349,30 @@ type WorkBuddyChatResult = {
  * @returns the bare multiplier, or undefined when nothing displayable remains.
  */
 declare function normalizeCredits(credits: string | undefined): string | undefined;
-/** Classify an upstream failure from its HTTP status and body excerpt. */
+/**
+ * Classify an upstream failure from its HTTP status and body excerpt.
+ *
+ * Order is load-bearing:
+ *
+ * - A hard credit refusal (402, or an exhausted-balance phrase) is terminal for
+ *   the account, so it is checked first.
+ * - Session death follows, because its marker appears in bodies that also carry
+ *   other numbers.
+ * - **429 comes before the credit phrase list.** A throttling body often also
+ *   says "quota exceeded"; reading that as an exhausted balance parks a healthy
+ *   account until the next billing day instead of retrying shortly. Testing the
+ *   status first is what keeps the two apart.
+ * - The phrase lists then catch what the status alone does not report.
+ */
 declare function classifyUpstreamError(status: number, body: string): UpstreamErrorKind;
 /** Region for a login domain; an empty domain means CN (matching upstream tooling). */
 declare function regionOf(domain: string): WorkBuddyRegion;
 /**
- * Normalize an OpenAI chat-completions body for the WorkBuddy upstream:
- * force `stream: true` (the upstream rejects non-streaming), flatten
- * `tool_choice` (the upstream's field is a string; object forms return 400),
- * and rewrite `developer` messages as `system`.
+ * Normalize an OpenAI chat-completions body for the WorkBuddy upstream: force
+ * `stream: true` (the upstream rejects non-streaming), translate the
+ * `max_completion_tokens` alias, default `stream_options`, flatten `tool_choice`
+ * (the upstream's field is a string; object forms return 400), and rewrite
+ * `developer` messages as `system`.
  *
  * The `developer` rewrite is load-bearing: pi-ai emits the system prompt as
  * `role: "developer"` (the OpenAI convention it adopted), but the WorkBuddy
@@ -544,15 +560,11 @@ interface WorkBuddyVariant {
   id: string;
   /** Model-group heading and card title stem, e.g. `WorkBuddy AI`. */
   displayName: string;
-  /** Desktop app name as users know it, for diagnostics and error copy. */
+  /** Product name as users know it, for diagnostics and error copy. */
   appName: string;
-  /** Which upstream region this variant's credentials must belong to. */
+  /** Which upstream realm this variant's credentials must belong to. */
   region: WorkBuddyRegion;
-  /** Env var overriding the desktop auth-file location. */
-  env: string;
-  /** Basename of the desktop app's own auth file in the shared auth directory. */
-  desktopFilename: string;
-  /** Basename of the plugin-owned credential copy under `$DSH_HOME`. */
+  /** Basename of the plugin-owned credential file under `$DSH_HOME`. */
   ownFilename: string;
   /** Basename of the plugin-owned probe-record file under `$DSH_HOME`. */
   probeFilename: string;
@@ -568,6 +580,8 @@ interface WorkBuddyVariant {
   statusPath: string;
   /** Same-origin probe-control route consumed by this variant's card. */
   probePath: string;
+  /** Same-origin sign-in route consumed by this variant's card. */
+  loginPath: string;
 }
 /** CN WorkBuddy first: the existing provider keeps its id, paths, and copy. */
 declare const WORKBUDDY_VARIANTS: readonly WorkBuddyVariant[];
@@ -579,6 +593,8 @@ declare const AI_VARIANT: WorkBuddyVariant;
 declare function variantFor(id: string): WorkBuddyVariant | undefined;
 //#endregion
 //#region src/auth.d.ts
+/** The one provenance a stored credential can have: this plugin's own login. */
+declare const WORKBUDDY_CREDENTIAL_SOURCE = "login";
 /** Normalized WorkBuddy credential, timestamps in epoch milliseconds. */
 interface WorkBuddyCredential {
   accessToken: string;
@@ -586,11 +602,21 @@ interface WorkBuddyCredential {
   expiresAtMs: number;
   refreshExpiresAtMs?: number;
   domain: string;
+  /**
+   * The realm a supplied document declared, when it declared one.
+   *
+   * Absent for a credential this plugin obtained by logging in, whose realm the
+   * domain already states. It exists for an imported document: the sibling
+   * tooling writes an explicit `region`, and honouring it is what keeps a
+   * credential that names its realm from being routed by a domain it disagrees
+   * with.
+   */
+  region?: WorkBuddyRegion;
   uid: string;
   enterpriseId?: string;
   nickname?: string;
-  /** Which storage the credential was read from; refreshes are always `dsh`. */
-  source: 'desktop' | 'dsh';
+  /** Always {@link WORKBUDDY_CREDENTIAL_SOURCE}; carried so callers can display it. */
+  source: typeof WORKBUDDY_CREDENTIAL_SOURCE;
 }
 /** Read-only sign-in summary for status and doctor output. */
 interface WorkBuddyAuthStatus {
@@ -599,90 +625,112 @@ interface WorkBuddyAuthStatus {
   refreshExpiresAtMs?: number;
   nickname?: string;
   domain?: string;
-  source?: 'desktop' | 'dsh';
+  /** Which upstream region the stored credential belongs to. */
+  region?: WorkBuddyRegion;
   /**
    * Why no credential is usable, when the reason is diagnosable rather than
-   * "nobody is signed in" — a region mismatch being the case that matters.
-   * Present only on `signed-out`, and never a substitute for fixing the file.
+   * "nobody has signed in" — a credential stored for the other realm being the
+   * case that matters.
    */
   reason?: string;
 }
-/** Constructor options; only {@link refresh} is required. */
+/** Constructor options; only {@link WorkBuddyStoreOptions.refresh} is required. */
 interface WorkBuddyStoreOptions {
   variant?: WorkBuddyVariant;
-  /** Explicit desktop auth-file path, overriding env and platform defaults. */
-  desktopPath?: string;
-  /** Explicit plugin-owned copy path, defaulting under `$DSH_HOME`. */
+  /** Explicit plugin-owned credential path, defaulting under `$DSH_HOME`. */
   ownPath?: string;
   /** Performs the upstream token refresh. */
   refresh: (credential: WorkBuddyCredential) => Promise<WorkBuddyRefreshOutcome>;
   /** Refresh this long before actual expiry; default five minutes. */
   refreshMarginMs?: number;
 }
-/** Basename of the plugin-owned credential copy inside the Harness home. */
+/** Basename of the plugin-owned credential file inside the plugin's data directory. */
 declare const WORKBUDDY_AUTH_FILENAME = ".workbuddy-auth.json";
-/** Env variable that overrides the desktop auth-file location. */
-declare const WORKBUDDY_AUTH_FILE_ENV = "WORKBUDDY_AUTH_FILE";
-/** Plugin-owned copy path inside the Harness home. */
+/**
+ * Name of the folder this plugin keeps its own files in.
+ *
+ * Scoped per profile, so the two plugins' state and two profiles' sign-ins stay
+ * apart: DSH already separates a profile's installed plugins, and a credential
+ * belongs to the profile that is running rather than to the machine.
+ */
+declare const WORKBUDDY_DATA_DIR_NAME = ".dsh-workbuddy-connect";
+/** Env var overriding the plugin's data directory; used by tests and by a host that sets one. */
+declare const WORKBUDDY_DATA_DIR_ENV = "DSH_WORKBUDDY_DATA_DIR";
+/**
+ * The directory this plugin keeps its own files in: `<profile>/.dsh-workbuddy-connect`.
+ *
+ * Falls back to the Harness home when no profile can be discovered — a checkout
+ * running its own tests, or a host that loads the plugin from outside a profile —
+ * so the plugin always has somewhere to write, and `DSH_WORKBUDDY_DATA_DIR`
+ * overrides either way.
+ */
+declare function workbuddyPluginDataDir(): string;
+/**
+ * Plugin-owned credential path used when no variant names its own file.
+ *
+ * @returns the path inside the plugin's data directory.
+ */
 declare function workbuddyOwnAuthPath(): string;
 /**
- * Platform-default candidates for the WorkBuddy desktop app's auth file, in
- * probe order. Windows probes both AppData roots: current builds write under
- * `%LOCALAPPDATA%` (Local), older ones under `%APPDATA%` (Roaming). WSL probes
- * those same Windows locations through its mounted Windows profile before the
- * native Linux location.
- */
-declare function defaultDesktopAuthCandidates(): string[];
-/**
- * The platform-default candidates for one variant, in probe order.
+ * Parse a WorkBuddy credential document in either on-disk layout: the nested
+ * form `{"auth":{...},"account":{...}}` this plugin writes and the sibling
+ * tooling publishes, and the flat form hand-written files use. Returns undefined
+ * when the document carries no access token.
  *
- * Both apps write into the *same* shared `CodeBuddyExtension` auth directory
- * and differ only in the file's basename, so the per-platform ordering above
- * is reused verbatim and just the filename is swapped.
- */
-declare function desktopAuthCandidatesFor(variant: WorkBuddyVariant): string[];
-/** First platform-default candidate; see {@link defaultDesktopAuthCandidates}. */
-declare function defaultDesktopAuthPath(variant?: WorkBuddyVariant): string | undefined;
-/**
- * Parse a WorkBuddy auth document in either on-disk shape: the plugin OAuth
- * nested form `{"auth":{...},"account":{...}}` and the flat panel form.
- * Returns undefined when the document carries no access token.
+ * Tolerance is deliberate: this is a published cross-tool format, and a file
+ * written by a sibling tool must keep loading rather than silently signing the
+ * user out. Two spellings of "which realm" are accepted — a top-level `region`
+ * and a nested `auth.realm` — because both are in use.
  */
 declare function parseWorkBuddyAuth(text: string): WorkBuddyCredential | undefined;
 /**
- * Read-only credential store with demand-driven refresh.
+ * Credential store with demand-driven refresh.
  *
- * Refresh policy: refresh only when the access token is inside the margin
- * (or already expired), keep the refreshed credential in the plugin-owned
- * copy, and never write the desktop app's file. A failed refresh still
- * returns a not-yet-expired token so an unreachable refresh endpoint does
- * not take down a working session.
+ * Refresh policy: refresh only when the access token is inside the margin (or
+ * already expired), and keep the refreshed credential in the plugin-owned file.
+ * A failed refresh still returns a not-yet-expired token, so an unreachable
+ * refresh endpoint does not take down a working session.
  */
 declare class WorkBuddyCredentialStore {
   private readonly variant;
   private readonly refresh;
   private readonly refreshMarginMs;
   private readonly ownPath;
-  private desktopPathOverride;
   private inflight;
   constructor(options: WorkBuddyStoreOptions);
-  /**
-   * Configuration precedence for the desktop file: the plugin's configured
-   * path, then the environment variable, then the platform defaults. An
-   * explicit path is used verbatim; the defaults are a probe order.
-   */
-  private resolveDesktopCandidates;
-  private resolveDesktopPath;
-  /**
-   * Repoint the desktop file; a settings change applies on the next read.
-   */
-  setDesktopPath(path: string | undefined): void;
-  /** The resolved desktop auth-file path, for diagnostics. */
-  desktopAuthPath(): string | undefined;
-  /** The plugin-owned copy path, for diagnostics. */
+  /** The plugin-owned credential path, for diagnostics. */
   ownAuthPath(): string;
-  /** Read the freshest stored credential without refreshing anything. */
+  /**
+   * Read the stored credential without refreshing anything.
+   *
+   * A credential belonging to the other realm is refused rather than used: one
+   * plugin serves both products, and sending one realm's token to the other's
+   * endpoint would leak it across products. The error names the file and the
+   * expected realm, which is what makes it fixable.
+   */
   current(): Promise<WorkBuddyCredential | undefined>;
+  /**
+   * Adopt a credential document supplied by the user.
+   *
+   * The document is parsed with the tolerant cross-tool reader, so a
+   * `workbuddy.json` written by the sibling tooling imports as-is. It is then
+   * checked against this store's realm before anything is written: a document
+   * for the other product is refused with a message naming that product, rather
+   * than stored and refused on every later read.
+   *
+   * @param text - the document's text, exactly as read from the user's file.
+   * @returns the adopted credential, for a secret-free summary.
+   * @throws when the text carries no usable credential or belongs to the other realm.
+   */
+  importDocument(text: string): Promise<WorkBuddyCredential>;
+  /**
+   * Persist a credential a login just obtained. This is the store's only write
+   * path besides refresh; the login route is its only caller.
+   *
+   * A credential for the wrong realm is refused here, at the boundary that knows
+   * which product asked, rather than written and refused on every later read.
+   */
+  save(credential: WorkBuddyCredential): Promise<void>;
   /**
    * The credential to send upstream: {@link current}, refreshed on demand.
    * Single-flight, so parallel requests share one refresh.
@@ -690,21 +738,12 @@ declare class WorkBuddyCredentialStore {
   resolve(): Promise<WorkBuddyCredential>;
   /** Read-only sign-in summary; never refreshes and never throws. */
   status(): Promise<WorkBuddyAuthStatus>;
-  /** Remove the plugin-owned copy; the desktop file is untouched. */
+  /** Remove the stored credential. */
   logout(): Promise<void>;
   private needsRefresh;
   private refreshNow;
   private saveOwn;
-  /**
-   * Read the first desktop candidate that exists. Only an absent file
-   * (ENOENT) falls through to the next candidate; a file that is present
-   * but unparsable is authoritative for its slot, so a stale older-version
-   * file never silently wins over a broken newer one.
-   */
-  private readDesktop;
   private readOwn;
-  /** Whether any desktop-file candidate exists as a regular file; diagnostics only. */
-  desktopFilePresent(): Promise<boolean>;
 }
 //#endregion
 //#region src/catalog.d.ts
@@ -1070,6 +1109,205 @@ declare class WorkBuddyProbeService {
   probe(modelId: string, manualConsent?: boolean): Promise<WorkBuddyProbeStatus>;
 }
 //#endregion
+//#region src/login.d.ts
+/** Business code `auth/token` returns while the browser half is unfinished. */
+declare const LOGIN_PENDING_CODE = 11217;
+/** One issued login attempt: what to open, and what to poll with. */
+interface WorkBuddyLoginAttempt {
+  state: string;
+  /** Browser URL the human opens to approve the sign-in. */
+  authUrl: string;
+  region: WorkBuddyRegion;
+}
+/** The token bundle `auth/token` returns once the browser half is finished. */
+interface WorkBuddyLoginTokens {
+  accessToken: string;
+  refreshToken: string;
+  expiresInSec: number;
+  domain: string;
+}
+/** The account identity `login/account` adds to a finished attempt. */
+interface WorkBuddyLoginAccount {
+  uid: string;
+  enterpriseId?: string;
+  nickname?: string;
+}
+/** Outcome of one poll. */
+type WorkBuddyLoginPoll = {
+  status: 'pending';
+} | {
+  status: 'complete';
+  tokens: WorkBuddyLoginTokens;
+  account: WorkBuddyLoginAccount;
+};
+/**
+ * Normalize a realm spelling, folding anything unrecognised onto CN so a
+ * missing or mistyped value behaves like the deployment the plugin shipped for.
+ */
+declare function normalizeLoginRegion(region: string | undefined): WorkBuddyRegion;
+/**
+ * The realm a finished login belongs to: the realm the attempt was started
+ * against, falling back to what the returned domain says when the attempt
+ * carried none. The domain fallback exists because the upstream may answer a
+ * login with a credential for the domain it redirected to.
+ */
+declare function resolveLoginRegion(region: WorkBuddyRegion, domain: string): WorkBuddyRegion;
+/**
+ * The login client. One instance serves both cards; each attempt owns its own
+ * cookie jar, keyed by the state it issued.
+ */
+declare class WorkBuddyLoginClient {
+  private readonly fetchImpl;
+  private readonly jars;
+  constructor(fetchImpl?: typeof fetch);
+  /** Request headers for one realm, carrying the attempt's cookies when it has any. */
+  private headers;
+  /**
+   * Issue one attempt: obtain the state and the URL the human must open.
+   *
+   * The response's cookies are retained under the returned state, because the
+   * poll that finishes this attempt has to present them.
+   */
+  begin(region: WorkBuddyRegion): Promise<WorkBuddyLoginAttempt>;
+  /** Drop a finished or abandoned attempt's jar. */
+  forget(state: string): void;
+  /** How many attempts currently hold a jar; diagnostics and tests. */
+  pendingCount(): number;
+  /**
+   * Poll one attempt once. The caller drives the cadence.
+   *
+   * `pending` covers both "the human has not finished" (business code 11217)
+   * and "the gateway refused this poll yet" (a 4xx while the browser half is
+   * still open) — the latter is what the CN endpoint answers before the
+   * browser visit completes. A transport failure, or a 5xx, is a real error
+   * and is thrown: retrying those as pending would hide an outage behind a
+   * spinner that never resolves.
+   */
+  poll(attempt: WorkBuddyLoginAttempt): Promise<WorkBuddyLoginPoll>;
+  /**
+   * Read the account identity for a finished attempt.
+   *
+   * Best effort by design: the token bundle is what makes the credential
+   * usable, and the identity only improves the display name and the
+   * `X-User-Id` header. A failure here must not discard a working login.
+   */
+  private fetchAccount;
+}
+//#endregion
+//#region src/status-paths.d.ts
+/**
+ * Plugin-owned sign-in endpoints, one per variant.
+ *
+ * Each variant signs in against its own realm, so each needs its own route: the
+ * realm is chosen by which provider the user is looking at, never by a value the
+ * browser sends. A POST here starts an attempt (or polls one, or signs out);
+ * see {@link WorkBuddyWebLoginRequest}.
+ */
+declare const WORKBUDDY_LOGIN_PATH = "/plugins/dsh-workbuddy-connect/login";
+declare const WORKBUDDY_AI_LOGIN_PATH = "/plugins/dsh-workbuddy-connect/ai/login";
+/**
+ * One action the sign-in route accepts.
+ *
+ * `begin` returns the URL the human must open; `poll` reports whether that visit
+ * has finished; `logout` removes the stored credential; `import` adopts a
+ * credential document the user already has (a `workbuddy.json` from the sibling
+ * tooling, or one exported from another machine). All four are writes — `begin`
+ * holds a pending attempt, `import` and `poll` commit a credential — which is why
+ * they share this route's in-process key rather than the read-only status GET.
+ */
+type WorkBuddyWebLoginAction = 'begin' | 'poll' | 'logout' | 'import';
+/** Request body accepted by the sign-in route. */
+interface WorkBuddyWebLoginRequest {
+  action: WorkBuddyWebLoginAction;
+  /** The attempt to poll; required for `poll` and ignored otherwise. */
+  state?: string;
+  /**
+   * The credential document to adopt; required for `import`.
+   *
+   * Travels as text rather than as a path because the browser has no filesystem:
+   * the card reads the file the user picked and posts its contents. The host
+   * parses and validates it before anything is written.
+   */
+  document?: string;
+}
+/**
+ * Progress of one sign-in attempt, as the card renders it.
+ *
+ * `pending` carries the URL to open so a card that lost the `begin` response
+ * (a re-render, a second tab) can still show where to go. `imported` reports a
+ * document that was adopted, with the account it belongs to. `failed` is a
+ * diagnosis, not an error page: the upstream or the network refused, and the
+ * message says which.
+ */
+type WorkBuddyWebLoginResult = {
+  status: 'pending';
+  state: string;
+  url?: string;
+} | {
+  status: 'complete';
+  nickname?: string;
+} | {
+  status: 'imported';
+  uid?: string;
+  nickname?: string;
+} | {
+  status: 'signed-out';
+} | {
+  status: 'failed';
+  message: string;
+};
+//#endregion
+//#region src/login-route.d.ts
+/** Constructor dependencies. */
+interface WorkBuddyLoginRouteOptions {
+  /**
+   * Start an attempt for this variant's realm.
+   *
+   * @returns the state to poll and the URL the human must open.
+   */
+  begin: () => Promise<{
+    state: string;
+    url: string;
+  }>;
+  /**
+   * Poll one attempt. Resolving to a completed credential means it has already
+   * been persisted; the route never sees token material.
+   *
+   * @param state - the attempt to poll.
+   */
+  poll: (state: string) => Promise<WorkBuddyWebLoginResult>;
+  /** Remove the stored credential. */
+  logout: () => Promise<void>;
+  /**
+   * Adopt a credential document the user supplied.
+   *
+   * @param document - the document's text, exactly as the browser read it.
+   * @returns a summary of the adopted credential, without its secrets.
+   */
+  importDocument: (document: string) => Promise<{
+    uid?: string;
+    nickname?: string;
+  }>;
+  /**
+   * Route path to mount. Defaults to the CN variant's path so existing callers
+   * and tests keep their behaviour; the international variant passes its own.
+   */
+  path?: string;
+}
+/**
+ * The sign-in route's handler, extracted so tests can mount it on a bare server
+ * with a known key.
+ *
+ * @param deps - the login operations for one variant.
+ * @param key - the in-process control key this route requires.
+ * @returns the Node request handler.
+ */
+declare function workBuddyLoginHandler(deps: WorkBuddyLoginRouteOptions, key: string): (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+/** Mint the per-process sign-in control key. */
+declare function createLoginKey(): string;
+/** Mount the POST sign-in route on an optional webServer context. */
+declare function registerWorkBuddyLoginRoute(ctx: Context, deps: WorkBuddyLoginRouteOptions, key: string): void;
+//#endregion
 //#region src/host-heartbeat.d.ts
 /**
  * Host-side heartbeat: a small JSON file written under `$DSH_HOME` once the
@@ -1167,10 +1405,6 @@ declare const WORKBUDDY_SETTINGS_NS: SettingsNamespace;
 declare const WORKBUDDY_AI_SETTINGS_NS: SettingsNamespace;
 /** Plugin configuration. */
 interface Config {
-  /** Explicit WorkBuddy (CN) desktop auth-file path, overriding env and platform defaults. */
-  authFile?: string;
-  /** Explicit WorkBuddy AI (international) desktop auth-file path, overriding env and platform defaults. */
-  authFileAI?: string;
   /**
    * Whether the user has authorized sending probe requests about reasoning
    * efforts. Off by default: a probe spends real credit, so nothing is sent
@@ -1193,4 +1427,4 @@ declare const Config: z<Config>;
  */
 declare function apply(ctx: Context, config: Config): void;
 //#endregion
-export { AI_VARIANT, type AppVersionInfo, CN_APP_VERSION_FILENAME, CN_VARIANT, type ChatIdentity, Config, FALLBACK_CN_APP_VERSION, FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS, PROBE_EFFORT_CANDIDATES, type ProbeAttempt, type ProbeOutcome, type ProbeSender, type ResolveChatIdentityOptions, type UpstreamErrorKind, WORKBUDDY_AI_SETTINGS_NS, WORKBUDDY_APP_VERSION_FILENAME, WORKBUDDY_AUTH_FILENAME, WORKBUDDY_AUTH_FILE_ENV, WORKBUDDY_CATALOG_FILENAME, WORKBUDDY_HOST_HEARTBEAT_FILENAME, WORKBUDDY_PROBE_FILENAME, WORKBUDDY_PROVIDER, WORKBUDDY_SETTINGS_NS, WORKBUDDY_STREAM_IDLE_TIMEOUT_MS, WORKBUDDY_VARIANTS, type WorkBuddyAdapter, type WorkBuddyAppVersionSource, type WorkBuddyAuthStatus, WorkBuddyCatalog, type WorkBuddyCatalogFetch, WorkBuddyCatalogStore, type WorkBuddyChatResult, type WorkBuddyCredential, WorkBuddyCredentialStore, type WorkBuddyCredits, type WorkBuddyEffort, type WorkBuddyHostHeartbeat, type WorkBuddyModelBilling, type WorkBuddyModelInfo, type WorkBuddyModelReasoning, type WorkBuddyProbeRecord, WorkBuddyProbeService, type WorkBuddyProbeStatus, WorkBuddyProbeStore, type WorkBuddyProbeValidation, type WorkBuddyPromotion, type WorkBuddyRefreshOutcome, type WorkBuddyShim, WorkBuddyUpstreamClient, type WorkBuddyUpstreamModel, type WorkBuddyVariant, appUserAgent, apply, chatUserAgent, classifyUpstreamError, clearHostHeartbeat, createWorkBuddyAdapter, createWorkBuddyShim, defaultDesktopAuthCandidates, defaultDesktopAuthPath, desktopAuthCandidatesFor, fallbackChatIdentity, fingerprintModel, inject, installedAppVersion, isHeartbeatProcessAlive, modelWithCurrentPromotion, name, normalizeCredits, parseModelCatalog, parseWorkBuddyAuth, prepareChatBody, prepareInternationalChatBody, probeModel, processStartTimeMs, randomSentinel, readBundleVersion, readCliVersion, readHostHeartbeat, regionOf, resolveAppVersion, resolveChatIdentity, validAppVersion, validCliVersion, variantFor, workbuddyCatalogPath, workbuddyHostHeartbeatPath, workbuddyOwnAuthPath, workbuddyProbePath };
+export { AI_VARIANT, type AppVersionInfo, CN_APP_VERSION_FILENAME, CN_VARIANT, type ChatIdentity, Config, FALLBACK_CN_APP_VERSION, FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS, LOGIN_PENDING_CODE, PROBE_EFFORT_CANDIDATES, type ProbeAttempt, type ProbeOutcome, type ProbeSender, type ResolveChatIdentityOptions, type UpstreamErrorKind, WORKBUDDY_AI_LOGIN_PATH, WORKBUDDY_AI_SETTINGS_NS, WORKBUDDY_APP_VERSION_FILENAME, WORKBUDDY_AUTH_FILENAME, WORKBUDDY_CATALOG_FILENAME, WORKBUDDY_CREDENTIAL_SOURCE, WORKBUDDY_DATA_DIR_ENV, WORKBUDDY_DATA_DIR_NAME, WORKBUDDY_HOST_HEARTBEAT_FILENAME, WORKBUDDY_LOGIN_PATH, WORKBUDDY_PROBE_FILENAME, WORKBUDDY_PROVIDER, WORKBUDDY_SETTINGS_NS, WORKBUDDY_STREAM_IDLE_TIMEOUT_MS, WORKBUDDY_VARIANTS, type WorkBuddyAdapter, type WorkBuddyAppVersionSource, type WorkBuddyAuthStatus, WorkBuddyCatalog, type WorkBuddyCatalogFetch, WorkBuddyCatalogStore, type WorkBuddyChatResult, type WorkBuddyCredential, WorkBuddyCredentialStore, type WorkBuddyCredits, type WorkBuddyEffort, type WorkBuddyHostHeartbeat, type WorkBuddyLoginAccount, type WorkBuddyLoginAttempt, WorkBuddyLoginClient, type WorkBuddyLoginPoll, type WorkBuddyLoginRouteOptions, type WorkBuddyLoginTokens, type WorkBuddyModelBilling, type WorkBuddyModelInfo, type WorkBuddyModelReasoning, type WorkBuddyProbeRecord, WorkBuddyProbeService, type WorkBuddyProbeStatus, WorkBuddyProbeStore, type WorkBuddyProbeValidation, type WorkBuddyPromotion, type WorkBuddyRefreshOutcome, type WorkBuddyShim, WorkBuddyUpstreamClient, type WorkBuddyUpstreamModel, type WorkBuddyVariant, type WorkBuddyWebLoginAction, type WorkBuddyWebLoginRequest, type WorkBuddyWebLoginResult, appUserAgent, apply, chatUserAgent, classifyUpstreamError, clearHostHeartbeat, createLoginKey, createWorkBuddyAdapter, createWorkBuddyShim, fallbackChatIdentity, fingerprintModel, inject, installedAppVersion, isHeartbeatProcessAlive, modelWithCurrentPromotion, name, normalizeCredits, normalizeLoginRegion, parseModelCatalog, parseWorkBuddyAuth, prepareChatBody, prepareInternationalChatBody, probeModel, processStartTimeMs, randomSentinel, readBundleVersion, readCliVersion, readHostHeartbeat, regionOf, registerWorkBuddyLoginRoute, resolveAppVersion, resolveChatIdentity, resolveLoginRegion, validAppVersion, validCliVersion, variantFor, workBuddyLoginHandler, workbuddyCatalogPath, workbuddyHostHeartbeatPath, workbuddyOwnAuthPath, workbuddyPluginDataDir, workbuddyProbePath };

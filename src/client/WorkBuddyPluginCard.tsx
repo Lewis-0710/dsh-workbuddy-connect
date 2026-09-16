@@ -1,10 +1,10 @@
 /** WorkBuddy status card contributed to Harness Plugin configuration. */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { CSSProperties } from 'react'
+import type { CSSProperties, ReactElement } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
-import { WORKBUDDY_AI_PROBE_PATH, WORKBUDDY_AI_STATUS_PATH, WORKBUDDY_PROBE_PATH, WORKBUDDY_STATUS_PATH } from '../status-paths.ts'
+import { WORKBUDDY_AI_LOGIN_PATH, WORKBUDDY_AI_PROBE_PATH, WORKBUDDY_AI_STATUS_PATH, WORKBUDDY_LOGIN_PATH, WORKBUDDY_PROBE_PATH, WORKBUDDY_STATUS_PATH } from '../status-paths.ts'
 import type { WorkBuddyWebModelBadge, WorkBuddyWebProbeSection, WorkBuddyWebStatus } from '../status-paths.ts'
 import { isWorkBuddyWebStatus } from './status-document.ts'
 import type { WorkBuddySettingsKey } from './locales.ts'
@@ -33,6 +33,7 @@ export interface WorkBuddyCardVariant {
   signedOutKey: WorkBuddySettingsKey
   statusPath: string
   probePath: string
+  loginPath: string
 }
 
 /** CN WorkBuddy; the plugin's long-standing card and default. */
@@ -43,6 +44,7 @@ export const CN_CARD_VARIANT: WorkBuddyCardVariant = {
   signedOutKey: 'signedOutHint',
   statusPath: WORKBUDDY_STATUS_PATH,
   probePath: WORKBUDDY_PROBE_PATH,
+  loginPath: WORKBUDDY_LOGIN_PATH,
 }
 
 /** International WorkBuddy AI. */
@@ -53,6 +55,7 @@ export const AI_CARD_VARIANT: WorkBuddyCardVariant = {
   signedOutKey: 'signedOutHintAI',
   statusPath: WORKBUDDY_AI_STATUS_PATH,
   probePath: WORKBUDDY_AI_PROBE_PATH,
+  loginPath: WORKBUDDY_AI_LOGIN_PATH,
 }
 
 /** Both cards, in display order. */
@@ -64,51 +67,162 @@ export type WorkBuddyPluginCardProps =
 
 const POLL_INTERVAL_MS = 60_000
 
+/*
+ * Styling mirrors the Settings panel's own plugin card (`.YyYd_a_card` in the
+ * client bundle) rather than inventing a look: the same tokens, the same
+ * geometry, and the same hover/open treatment. The values here are that rule's
+ * values, so a card from this plugin sits in the list beside a built-in one
+ * without reading as a different kind of object.
+ */
 const cardStyle: CSSProperties = {
-  overflow: 'hidden',
-  border: '1px solid var(--dsw-alias-border-l2)',
-  borderRadius: 10,
-  background: 'var(--dsw-alias-bg-module-platform)',
+  listStyle: 'none',
+  /*
+   * Border as longhands, never the `border` shorthand.
+   *
+   * The hover and open states below override the colour, and React applies an
+   * override by assigning the property and clearing it by assigning `''`. That
+   * clear is what breaks a shorthand: the shorthand was expanded by the CSSOM
+   * into longhands, React then considers `border` unchanged and never re-applies
+   * it, and clearing `border-color` leaves the whole border unset — so it falls
+   * back to `currentColor` and the card grows a near-black outline. Declaring the
+   * three longhands keeps the colour always present in the style object, so React
+   * assigns a value on every render instead of ever clearing one.
+   */
+  borderWidth: '0.5px',
+  borderStyle: 'solid',
+  borderColor: 'var(--dsw-alias-border-l4)',
+  borderRadius: 16,
+  background: 'var(--dsw-alias-bg-layer-3)',
+  transition: 'border-color .16s, background .16s',
+}
+/** Hover, matching the built-in card's `:hover`. Inline styles cannot express a pseudo-class. */
+const cardHoverStyle: CSSProperties = { borderColor: 'var(--dsw-alias-label-dimmed)' }
+/** Expanded, matching the built-in card's open state. */
+const cardOpenStyle: CSSProperties = {
+  background: 'var(--dsw-alias-bg-layer-2)',
+  borderColor: 'var(--dsw-alias-label-dimmed)',
 }
 const headerStyle: CSSProperties = {
   boxSizing: 'border-box',
   width: '100%',
   display: 'flex',
   alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 16,
+  gap: 12,
   border: 0,
-  padding: '13px 14px',
+  borderRadius: 12,
+  padding: '14px 16px',
   background: 'transparent',
-  color: 'var(--dsw-alias-label-primary)',
+  color: 'inherit',
   font: 'inherit',
   textAlign: 'left',
   cursor: 'pointer',
+  // The built-in header declares this too; without it a native button can paint
+  // its own chrome on top of the transparent background.
+  appearance: 'none',
 }
-const headTextStyle: CSSProperties = { display: 'flex', minWidth: 0, flexDirection: 'column', gap: 3 }
-const nameStyle: CSSProperties = { fontSize: 14, lineHeight: '20px', fontWeight: 600 }
-const descriptionStyle: CSSProperties = { fontSize: 13, lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary)' }
-const chevronStyle: CSSProperties = { flex: '0 0 auto', fontSize: 18, lineHeight: 1, transition: 'transform 120ms ease' }
-const cardBodyStyle: CSSProperties = { borderTop: '1px solid var(--dsw-alias-border-l2)', padding: '16px 14px 18px' }
+/**
+ * The built-in header's keyboard focus ring.
+ *
+ * `:focus-visible` is what makes the ring appear for keyboard navigation but not
+ * for a mouse click, and an inline style cannot express a pseudo-class — so the
+ * component tracks it and applies this instead. Without it the header falls back
+ * to the browser's own outline, which is the black box that used to appear on
+ * focus where the built-in card shows a brand-coloured ring.
+ */
+const headerFocusStyle: CSSProperties = {
+  outline: '2px solid var(--dsw-alias-brand-primary)',
+  outlineOffset: -2,
+}
+const headTextStyle: CSSProperties = { display: 'flex', flex: 1, minWidth: 0, flexDirection: 'column', gap: 4 }
+const nameStyle: CSSProperties = { fontSize: 15, lineHeight: 1.4, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }
+const descriptionStyle: CSSProperties = { fontSize: 13, lineHeight: 1.5, color: 'var(--dsw-alias-label-tertiary)' }
+/**
+ * The disclosure chevron, drawn to match the Settings panel's own card.
+ *
+ * The built-in card renders `IconChevronDownOutline14` from the client's shared
+ * icon catalog, which the shell seeds into the module table. This plugin does
+ * not request that catalog, so the same outline is drawn here from the same path
+ * data: the text `⌄` glyph this replaces had a different shape, weight, and
+ * baseline from the icon the cards beside it use.
+ */
+function ChevronDownIcon(): ReactElement {
+  return (
+    <svg
+      width={14}
+      height={14}
+      viewBox="0 0 14 14"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      <path
+        d="M11.8486 5.5L11.4238 5.92383L8.69727 8.65137C8.44157 8.90706 8.21562 9.13382 8.01172 9.29785C7.79912 9.46883 7.55595 9.61756 7.25 9.66602C7.08435 9.69222 6.91565 9.69222 6.75 9.66602C6.44405 9.61756 6.20088 9.46883 5.98828 9.29785C5.78438 9.13382 5.55843 8.90706 5.30273 8.65137L2.57617 5.92383L2.15137 5.5L3 4.65137L3.42383 5.07617L6.15137 7.80273C6.42595 8.07732 6.59876 8.24849 6.74023 8.3623C6.87291 8.46904 6.92272 8.47813 6.9375 8.48047C6.97895 8.48703 7.02105 8.48703 7.0625 8.48047C7.07728 8.47813 7.12709 8.46904 7.25977 8.3623C7.40124 8.24849 7.57405 8.07732 7.84863 7.80273L10.5762 5.07617L11 4.65137L11.8486 5.5Z"
+        fill="currentColor"
+      />
+    </svg>
+  )
+}
 
-const bodyStyle: CSSProperties = { margin: 0, fontSize: 14, lineHeight: '22px', color: 'var(--dsw-alias-label-secondary)' }
+/** The built-in card's chevron rule: tertiary color, and only the rotation animates. */
+const chevronStyle: CSSProperties = {
+  flex: 'none',
+  display: 'flex',
+  color: 'var(--dsw-alias-label-tertiary)',
+  transition: 'transform .16s',
+}
+const cardBodyStyle: CSSProperties = {
+  borderTop: '.5px solid var(--dsw-alias-border-l2)',
+  margin: '0 16px',
+  padding: '12px 0 8px',
+}
+
+const bodyStyle: CSSProperties = { margin: 0, fontSize: 13, lineHeight: 1.5, color: 'var(--dsw-alias-label-tertiary)' }
 const rowStyle: CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }
-const statusStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 9, fontSize: 15, fontWeight: 500, color: 'var(--dsw-alias-label-primary)' }
-const buttonStyle: CSSProperties = { boxSizing: 'border-box', minHeight: 34, padding: '6px 14px', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 18, background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)', font: 'inherit', fontSize: 14, cursor: 'pointer' }
+const statusStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 500, lineHeight: 1.5, color: 'var(--dsw-alias-label-primary)' }
+/** The built-in secondary button: transparent, hairline border, 8px radius. */
+const buttonStyle: CSSProperties = {
+  boxSizing: 'border-box',
+  padding: '5px 14px',
+  border: '1px solid var(--dsw-alias-border-l2)',
+  borderRadius: 8,
+  background: 'transparent',
+  color: 'var(--dsw-alias-label-secondary)',
+  font: 'inherit',
+  fontSize: 13,
+  lineHeight: 1.5,
+  cursor: 'pointer',
+}
 const errorStyle: CSSProperties = { ...bodyStyle, color: 'var(--dsw-alias-state-error-primary)' }
 const quotaListStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 18, paddingTop: 2 }
 const quotaGroupStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 10 }
-const quotaTitleStyle: CSSProperties = { margin: 0, fontSize: 14, lineHeight: '20px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }
-const quotaLabelStyle: CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 13, lineHeight: '20px', color: 'var(--dsw-alias-label-secondary)' }
+const quotaTitleStyle: CSSProperties = { margin: 0, fontSize: 13, lineHeight: 1.5, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }
+const quotaLabelStyle: CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 13, lineHeight: 1.5, color: 'var(--dsw-alias-label-secondary)' }
 const modelBadgeStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }
 const modelOfferStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 2 }
-const modelRateStyle: CSSProperties = { fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary)' }
-const contextPreferenceStyle: CSSProperties = { display: 'flex', alignItems: 'flex-start', gap: 9, padding: '10px 12px', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 8, color: 'var(--dsw-alias-label-primary)', fontSize: 13, lineHeight: '20px' }
+const modelRateStyle: CSSProperties = { fontSize: 12, lineHeight: 1.5, color: 'var(--dsw-alias-label-tertiary)' }
+const contextPreferenceStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: 9,
+  padding: '10px 12px',
+  border: '.5px solid var(--dsw-alias-border-l4)',
+  borderRadius: 8,
+  background: 'var(--dsw-alias-bg-layer-3)',
+  color: 'var(--dsw-alias-label-primary)',
+  fontSize: 13,
+  lineHeight: 1.5,
+}
 const contextPreferenceCopyStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 2 }
+/**
+ * The promotional badge chip: the theme's soft success tint for the fill and its
+ * solid tone for the text. Both tokens exist in the shipped theme — the
+ * `-subtle` spelling this used to carry does not, which silently fell back to a
+ * hand-picked green and read as off-brand.
+ */
 const modelBadgeChipStyle: CSSProperties = {
   padding: '1px 8px', borderRadius: 999, fontSize: 11, lineHeight: '18px',
-  background: 'var(--dsw-alias-state-success-subtle, rgba(34, 160, 107, 0.12))',
-  color: 'var(--dsw-alias-state-success-primary, #22a06b)',
+  background: 'var(--dsw-alias-state-success-tertiary)',
+  color: 'var(--dsw-alias-state-success-primary)',
 }
 
 /**
@@ -570,6 +684,10 @@ function ProbeSection({ probe, t, onDetect, onClear, busy }: {
 export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyPluginCardProps) {
   if (t === undefined) throw new Error('WorkBuddy plugin card requires its translation function')
   const [open, setOpen] = useState(false)
+  /** Whether the pointer is over the card; drives the same border tint the built-in card gets on hover. */
+  const [hovered, setHovered] = useState(false)
+  /** Keyboard focus on the header, reproducing the built-in's `:focus-visible` ring. */
+  const [headerFocused, setHeaderFocused] = useState(false)
   /**
    * The document to render. `undefined` means *not read yet*, which is a
    * distinct state from "signed out": seeding this with a signed-out document
@@ -595,6 +713,20 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
    */
   const [readFailure, setReadFailure] = useState<string>()
   const [busy, setBusy] = useState(false)
+  /**
+   * The in-flight sign-in attempt, when there is one.
+   *
+   * `state` is the attempt to poll and `url` is where the human was sent, kept
+   * so the card can offer the link again after a re-render or a popup blocker
+   * stopped the automatic tab.
+   */
+  const [signIn, setSignIn] = useState<{ state: string; url: string }>()
+  /** Why the most recent sign-in attempt failed, when it did. */
+  const [signInError, setSignInError] = useState<string>()
+  /** Outcome of the most recent credential import, for the card to report. */
+  const [importNotice, setImportNotice] = useState<{ kind: 'done' | 'failed'; text: string }>()
+  /** The hidden file input the import button drives. */
+  const importInput = useRef<HTMLInputElement>(null)
   // Three tabs. Default is the live status plus the one action the card
   // carries; the two reference sets — context capacity, then rates and the
   // per-package breakdown — are deliberate visits, since neither changes while
@@ -627,6 +759,16 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
     manualControllers.current.add(controller)
     return controller
   }, [])
+
+  /**
+   * The in-process key authorizing this card's writes, or undefined until a
+   * document carrying one has been read.
+   *
+   * Derived once rather than read off each use site: the `error` arm carries no
+   * key, and reaching for `status.loginKey` in three places is three chances to
+   * dereference a state that has none.
+   */
+  const actionKey = status === undefined || status.status === 'error' ? undefined : status.loginKey
 
   /**
    * Read the status document and apply it under the two policies the card's
@@ -811,6 +953,228 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
     void control({ action: 'probe', model: modelId })
   }, [control])
 
+  /**
+   * Start a fresh attempt against this variant's realm, and send the browser to it.
+   *
+   * Shared by the signed-out card's sign-in button and by the signed-in card's
+   * account switch, which differ only in whether a credential was discarded
+   * first. The card never names the realm: the route it posts to belongs to this
+   * variant, so the host decides which upstream is signed in to. The returned
+   * URL is opened here rather than by the host because only the page can open a
+   * tab the user's popup blocker will accept as a response to their click.
+   */
+  const startAttempt = useCallback(async (key: string): Promise<void> => {
+    setSignInError(undefined)
+    setBusy(true)
+    const controller = trackController()
+    try {
+      const response = await fetch(variant.loginPath, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Login-Key': key },
+        credentials: 'same-origin',
+        signal: controller.signal,
+        body: JSON.stringify({ action: 'begin' }),
+      })
+      const value: unknown = await response.json().catch(() => undefined)
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const record = typeof value === 'object' && value !== null ? value as Record<string, unknown> : {}
+      const state = typeof record['state'] === 'string' ? record['state'] : ''
+      const url = typeof record['url'] === 'string' ? record['url'] : ''
+      if (state === '' || url === '') throw new Error(t('requestFailed'))
+      setSignIn({ state, url })
+      window.open(url, '_blank', 'noopener,noreferrer')
+    } catch (error: unknown) {
+      if (mounted.current && controller.signal.aborted !== true) {
+        setSignInError(error instanceof Error ? error.message : t('requestFailed'))
+      }
+    } finally {
+      manualControllers.current.delete(controller)
+      if (mounted.current) setBusy(false)
+    }
+  }, [t, trackController, variant.loginPath])
+
+  /** The signed-out card's sign-in button. */
+  const beginSignIn = useCallback(async (): Promise<void> => {
+    const key = actionKey
+    if (key === undefined) return
+    await startAttempt(key)
+  }, [actionKey, startAttempt])
+
+  /** Remove the stored credential and forget the account. */
+  const signOut = useCallback(async (): Promise<void> => {
+    if (status?.status !== 'signed-in' || status.loginKey === undefined) return
+    const key = status.loginKey
+    setBusy(true)
+    const controller = trackController()
+    try {
+      const response = await fetch(variant.loginPath, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Login-Key': key },
+        credentials: 'same-origin',
+        signal: controller.signal,
+        body: JSON.stringify({ action: 'logout' }),
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      setSignIn(undefined)
+      await refresh(controller.signal)
+    } catch (error: unknown) {
+      if (mounted.current && controller.signal.aborted !== true) {
+        setReadFailure(error instanceof Error ? error.message : t('requestFailed'))
+      }
+    } finally {
+      manualControllers.current.delete(controller)
+      if (mounted.current) setBusy(false)
+    }
+  }, [refresh, status, t, trackController, variant.loginPath])
+
+  /**
+   * Replace the signed-in account: discard the stored credential, then start a
+   * fresh attempt.
+   *
+   * One action rather than two, because the halves are only useful together: a
+   * user switching accounts has no reason to stay signed out in between, and
+   * making them press sign-out and then sign-in would leave a window where the
+   * card shows no account and the second button is easy to miss.
+   *
+   * The credential is the only thing discarded — the previous account's saved
+   * catalog and probe records are keyed by account, so they are left alone and
+   * simply stop applying.
+   */
+  const switchAccount = useCallback(async (): Promise<void> => {
+    const key = actionKey
+    if (key === undefined) return
+    setBusy(true)
+    setImportNotice(undefined)
+    setSignInError(undefined)
+    const controller = trackController()
+    try {
+      const response = await fetch(variant.loginPath, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Login-Key': key },
+        credentials: 'same-origin',
+        signal: controller.signal,
+        body: JSON.stringify({ action: 'logout' }),
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      setSignIn(undefined)
+      // Publish the sign-out before opening the next attempt, so the card never
+      // shows the previous account while the browser is being sent to the new one.
+      await refresh(controller.signal)
+    } catch (error: unknown) {
+      if (mounted.current && controller.signal.aborted !== true) {
+        setReadFailure(error instanceof Error ? error.message : t('requestFailed'))
+      }
+      return
+    } finally {
+      manualControllers.current.delete(controller)
+      if (mounted.current) setBusy(false)
+    }
+    await startAttempt(key)
+  }, [actionKey, refresh, startAttempt, t, trackController, variant.loginPath])
+
+  /**
+   * Poll the active attempt until it settles.
+   *
+   * Polling lives here rather than in the route because the browser already
+   * holds the cadence machinery (and this way an abandoned tab stops polling on
+   * its own). A `failed` answer ends the attempt and is reported; `pending`
+   * keeps waiting.
+   */
+  useEffect(() => {
+    if (signIn === undefined) return
+    let cancelled = false
+    const timer = setInterval(() => {
+      void (async () => {
+        // Either arm carries the key: a switch starts while the card still shows
+        // the signed-in document, and the poll must run from the first tick.
+        const key = actionKey
+        if (key === undefined) return
+        try {
+          const response = await fetch(variant.loginPath, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Login-Key': key },
+            credentials: 'same-origin',
+            body: JSON.stringify({ action: 'poll', state: signIn.state }),
+          })
+          const value: unknown = await response.json().catch(() => undefined)
+          if (cancelled || !mounted.current) return
+          const record = typeof value === 'object' && value !== null ? value as Record<string, unknown> : {}
+          const outcome = record['status']
+          if (outcome === 'complete') {
+            setSignIn(undefined)
+            setSignInError(undefined)
+            await refresh()
+            return
+          }
+          if (outcome === 'failed') {
+            setSignIn(undefined)
+            setSignInError(typeof record['message'] === 'string' ? record['message'] : t('requestFailed'))
+          }
+        } catch {
+          // A transient poll failure is not the attempt's outcome; the next tick
+          // retries. Only the route's own `failed` answer ends the wait.
+        }
+      })()
+    }, 2_000)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [actionKey, signIn, refresh, t, variant.loginPath])
+
+  /**
+   * Adopt a credential file the user picked.
+   *
+   * The browser reads the file and posts its text; the host parses and validates
+   * it. The card never inspects the document itself — the realm check and the
+   * write belong to the side that owns the credential store, and a card that
+   * decided either would be a second, weaker authority.
+   */
+  const importCredential = useCallback(async (file: File): Promise<void> => {
+    if (status?.status !== 'signed-out' || status.loginKey === undefined) return
+    const key = status.loginKey
+    setImportNotice(undefined)
+    setBusy(true)
+    const controller = trackController()
+    try {
+      const document = await file.text()
+      const response = await fetch(variant.loginPath, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Login-Key': key },
+        credentials: 'same-origin',
+        signal: controller.signal,
+        body: JSON.stringify({ action: 'import', document }),
+      })
+      const value: unknown = await response.json().catch(() => undefined)
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const record = typeof value === 'object' && value !== null ? value as Record<string, unknown> : {}
+      if (record['status'] === 'imported') {
+        const account = typeof record['nickname'] === 'string' && record['nickname'] !== ''
+          ? record['nickname']
+          : typeof record['uid'] === 'string' && record['uid'] !== '' ? record['uid'] : ''
+        setImportNotice({ kind: 'done', text: t('importDone', { account: account === '' ? '—' : account }) })
+        await refresh(controller.signal)
+        return
+      }
+      setImportNotice({
+        kind: 'failed',
+        text: t('importFailed', {
+          message: typeof record['message'] === 'string' ? record['message'] : t('requestFailed'),
+        }),
+      })
+    } catch (error: unknown) {
+      if (mounted.current && controller.signal.aborted !== true) {
+        setImportNotice({
+          kind: 'failed',
+          text: t('importFailed', { message: error instanceof Error ? error.message : t('requestFailed') }),
+        })
+      }
+    } finally {
+      manualControllers.current.delete(controller)
+      if (mounted.current) setBusy(false)
+    }
+  }, [refresh, status, t, trackController, variant.loginPath])
+
   const title = t(variant.titleKey)
   /*
    * `undefined` is "not read yet" and gets its own copy. It is not signed-out:
@@ -825,19 +1189,39 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
         : t('signedOut')
 
   return (
-    <li style={cardStyle}>
+    <li
+      style={{ ...cardStyle, ...hovered ? cardHoverStyle : {}, ...open ? cardOpenStyle : {} }}
+      onMouseEnter={() => { setHovered(true) }}
+      onMouseLeave={() => { setHovered(false) }}
+    >
       <button
         type="button"
-        style={headerStyle}
+        style={{ ...headerStyle, ...headerFocused ? headerFocusStyle : {} }}
         aria-expanded={open}
         aria-label={`${t(open ? 'collapse' : 'expand')}: ${title}`}
         onClick={() => { setOpen(!open) }}
+        onFocus={event => {
+          // Keyboard focus only: a click focuses the button too, and the built-in
+          // card shows no ring for that. If the browser cannot answer the query,
+          // keeping the ring is the safer failure — a visible focus indicator
+          // beats a missing one.
+          let keyboard = true
+          try {
+            keyboard = event.currentTarget.matches(':focus-visible')
+          } catch {
+            keyboard = true
+          }
+          if (keyboard) setHeaderFocused(true)
+        }}
+        onBlur={() => { setHeaderFocused(false) }}
       >
         <span style={headTextStyle}>
           <span style={nameStyle}>{title}</span>
           <span style={descriptionStyle}>{t(variant.introKey)}</span>
         </span>
-        <span aria-hidden="true" style={{ ...chevronStyle, transform: open ? 'rotate(180deg)' : 'none' }}>⌄</span>
+        <span style={{ ...chevronStyle, transform: open ? 'rotate(180deg)' : 'none' }}>
+          <ChevronDownIcon />
+        </span>
       </button>
       {open
         ? <div style={cardBodyStyle}>
@@ -851,6 +1235,16 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
               <button type="button" style={buttonStyle} disabled={busy} onClick={() => { void manualRefresh() }}>
                 {busy ? t('refreshing') : t('refresh')}
               </button>
+              {status?.status !== 'signed-in' || status.loginKey === undefined
+                ? null
+                : <>
+                    <button type="button" style={buttonStyle} disabled={busy} onClick={() => { void switchAccount() }}>
+                      {busy ? t('switchingAccount') : t('switchAccount')}
+                    </button>
+                    <button type="button" style={buttonStyle} disabled={busy} onClick={() => { void signOut() }}>
+                      {busy ? t('signingOut') : t('signOut')}
+                    </button>
+                  </>}
             </div>
             {/*
               * A failed read is reported beside the document still on screen,
@@ -1005,9 +1399,73 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
               // A mismatch explanation replaces the generic hint: telling a user
               // to "sign in" is wrong advice when a credential was found and
               // rejected for belonging to the other product.
-              ? <p style={status.reason === undefined ? bodyStyle : errorStyle}>
-                  {status.reason ?? t(variant.signedOutKey)}
-                </p>
+              ? <>
+                  <p style={status.reason === undefined ? bodyStyle : errorStyle}>
+                    {status.reason ?? t(variant.signedOutKey)}
+                  </p>
+                  {status.loginKey === undefined
+                    ? null
+                    : <div style={rowStyle}>
+                        <button
+                          type="button"
+                          style={buttonStyle}
+                          disabled={busy || signIn !== undefined}
+                          onClick={() => { void beginSignIn() }}
+                        >
+                          {signIn === undefined ? t('signIn') : t('signingIn')}
+                        </button>
+                        {/*
+                          * The link stays reachable after the automatic tab, so a
+                          * blocked popup or a closed tab is recoverable without
+                          * starting a new attempt (which would invalidate the
+                          * state the host is already polling).
+                        */}
+                        {signIn === undefined
+                          ? null
+                          : <a href={signIn.url} target="_blank" rel="noopener noreferrer" style={bodyStyle}>
+                              {t('signInOpenAgain')}
+                            </a>}
+                      </div>}
+                  {signIn === undefined ? null : <p style={bodyStyle}>{t('signInWaiting')}</p>}
+                  {signInError === undefined ? null : <p style={errorStyle}>{t('signInFailed', { message: signInError })}</p>}
+                  {/*
+                    * Import path: for a credential the user already has (a
+                    * workbuddy.json from the sibling tooling, or one carried over
+                    * from another machine). The browser can only read a file the
+                    * user explicitly picks, which is why this is a picker rather
+                    * than a path field.
+                  */}
+                  {status.loginKey === undefined
+                    ? null
+                    : <div style={rowStyle}>
+                        <span style={bodyStyle}>{t('importHeading')}</span>
+                        <button
+                          type="button"
+                          style={buttonStyle}
+                          disabled={busy || signIn !== undefined}
+                          onClick={() => { importInput.current?.click() }}
+                        >
+                          {busy ? t('importing') : t('importAction')}
+                        </button>
+                        <input
+                          ref={importInput}
+                          type="file"
+                          accept=".json,application/json"
+                          style={{ display: 'none' }}
+                          onChange={event => {
+                            const file = event.target.files?.[0]
+                            // Clear the value so picking the same file again still
+                            // fires a change event.
+                            event.target.value = ''
+                            if (file !== undefined) void importCredential(file)
+                          }}
+                        />
+                      </div>}
+                  {status.loginKey === undefined ? null : <p style={bodyStyle}>{t('importHint')}</p>}
+                  {importNotice === undefined
+                    ? null
+                    : <p style={importNotice.kind === 'failed' ? errorStyle : bodyStyle}>{importNotice.text}</p>}
+                </>
               : null}
             {status?.status === 'error' ? <p style={errorStyle}>{status.message}</p> : null}
           </div>

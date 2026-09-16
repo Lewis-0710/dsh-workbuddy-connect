@@ -17,7 +17,9 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-attachment'
-import { WorkBuddyCredentialStore, type WorkBuddyCredential } from './auth.ts'
+import { WorkBuddyCredentialStore, WORKBUDDY_CREDENTIAL_SOURCE, type WorkBuddyCredential } from './auth.ts'
+import { WorkBuddyLoginClient, resolveLoginRegion, type WorkBuddyLoginAttempt } from './login.ts'
+import { registerWorkBuddyLoginRoute } from './login-route.ts'
 import { FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS, WorkBuddyCatalog } from './catalog.ts'
 import { workbuddyCatalogPath, WorkBuddyCatalogStore } from './catalog-store.ts'
 import { createWorkBuddyAdapter } from './adapter.ts'
@@ -27,6 +29,7 @@ import { newestFirst, WorkBuddyProbeStore, workbuddyProbePath } from './probe-st
 import { WorkBuddyUpstreamClient } from './upstream.ts'
 import { registerWorkBuddyStatusRoute } from './web-status.ts'
 import { createProbeKey, registerWorkBuddyProbeRoute } from './probe-route.ts'
+import { createLoginKey } from './login-route.ts'
 import type { WorkBuddyModelInfo } from './catalog.ts'
 import type { WorkBuddyWebCatalog, WorkBuddyWebProbeSection } from './status-paths.ts'
 import { clearHostHeartbeat, writeHostHeartbeat } from './host-heartbeat.ts'
@@ -92,17 +95,40 @@ export {
   type ResolveChatIdentityOptions,
 } from './client-identity.ts'
 export {
-  defaultDesktopAuthCandidates,
-  defaultDesktopAuthPath,
-  desktopAuthCandidatesFor,
   parseWorkBuddyAuth,
-  WORKBUDDY_AUTH_FILE_ENV,
   WORKBUDDY_AUTH_FILENAME,
+  WORKBUDDY_CREDENTIAL_SOURCE,
+  WORKBUDDY_DATA_DIR_ENV,
+  WORKBUDDY_DATA_DIR_NAME,
   WorkBuddyCredentialStore,
   workbuddyOwnAuthPath,
+  workbuddyPluginDataDir,
   type WorkBuddyAuthStatus,
   type WorkBuddyCredential,
 } from './auth.ts'
+export {
+  LOGIN_PENDING_CODE,
+  normalizeLoginRegion,
+  resolveLoginRegion,
+  WorkBuddyLoginClient,
+  type WorkBuddyLoginAccount,
+  type WorkBuddyLoginAttempt,
+  type WorkBuddyLoginPoll,
+  type WorkBuddyLoginTokens,
+} from './login.ts'
+export {
+  createLoginKey,
+  registerWorkBuddyLoginRoute,
+  workBuddyLoginHandler,
+  type WorkBuddyLoginRouteOptions,
+} from './login-route.ts'
+export {
+  WORKBUDDY_AI_LOGIN_PATH,
+  WORKBUDDY_LOGIN_PATH,
+  type WorkBuddyWebLoginAction,
+  type WorkBuddyWebLoginRequest,
+  type WorkBuddyWebLoginResult,
+} from './status-paths.ts'
 export {
   classifyUpstreamError,
   modelWithCurrentPromotion,
@@ -211,10 +237,6 @@ const CATALOG_RETRY_SWEEPS = 10
 
 /** Plugin configuration. */
 export interface Config {
-  /** Explicit WorkBuddy (CN) desktop auth-file path, overriding env and platform defaults. */
-  authFile?: string
-  /** Explicit WorkBuddy AI (international) desktop auth-file path, overriding env and platform defaults. */
-  authFileAI?: string
   /**
    * Whether the user has authorized sending probe requests about reasoning
    * efforts. Off by default: a probe spends real credit, so nothing is sent
@@ -225,10 +247,6 @@ export interface Config {
   useMaximumContextWindow?: boolean
 }
 
-/** Explicit CN desktop auth-file path (shared by the plugin schema and its section). */
-const AUTH_FILE_FIELD = z.string().description('WorkBuddy desktop auth file (defaults to the app\'s own location)')
-/** Explicit international desktop auth-file path (shared by the plugin schema and its section). */
-const AUTH_FILE_AI_FIELD = z.string().description('WorkBuddy AI desktop auth file (defaults to the app\'s own location)')
 /** Probe authorization (shared by the plugin schema and the CN section). */
 const PROBE_CONSENT_FIELD = z.boolean().default(false)
   .description('Authorize reasoning-effort probes (each probe sends real requests that may consume credit)')
@@ -236,8 +254,6 @@ const MAXIMUM_CONTEXT_WINDOW_FIELD = z.boolean().default(true)
   .description('Use the largest context window declared by WorkBuddy AI when alternatives are available (on by default)')
 
 export const Config: z<Config> = z.object({
-  authFile: AUTH_FILE_FIELD,
-  authFileAI: AUTH_FILE_AI_FIELD,
   probeConsent: PROBE_CONSENT_FIELD,
   useMaximumContextWindow: MAXIMUM_CONTEXT_WINDOW_FIELD,
 })
@@ -252,13 +268,11 @@ export const Config: z<Config> = z.object({
  * so it is left where existing users set it rather than moved and re-asked.
  */
 const CN_SECTION: z<Config> = z.object({
-  authFile: AUTH_FILE_FIELD,
   probeConsent: PROBE_CONSENT_FIELD,
 })
 
 /** The international card's settings section and its context-window preference. */
 const AI_SECTION: z<Config> = z.object({
-  authFileAI: AUTH_FILE_AI_FIELD,
   useMaximumContextWindow: MAXIMUM_CONTEXT_WINDOW_FIELD,
 })
 
@@ -326,11 +340,6 @@ function credentialIdentity(credential: Pick<WorkBuddyCredential, 'uid' | 'enter
   return `${credential.uid}:${credential.enterpriseId ?? ''}`
 }
 
-/** Read the configured explicit auth-file path for one variant. */
-function configuredAuthFile(config: Config, variant: WorkBuddyVariant): string | undefined {
-  return variant.id === CN_VARIANT.id ? config.authFile : config.authFileAI
-}
-
 /** The settings namespace a variant's card and provider directory entry use. */
 function settingsNamespaceFor(variant: WorkBuddyVariant): SettingsNamespace {
   return variant.id === CN_VARIANT.id ? WORKBUDDY_SETTINGS_NS : WORKBUDDY_AI_SETTINGS_NS
@@ -355,10 +364,8 @@ function createVariantRuntime(
   identityOf: (variantId: string) => string | undefined,
 ): VariantRuntime {
   const client = new WorkBuddyUpstreamClient()
-  const configured = configuredAuthFile(config, variant)
   const store = new WorkBuddyCredentialStore({
     variant,
-    ...configured === undefined ? {} : { desktopPath: configured },
     refresh: credential => client.refreshToken(credential),
   })
   const fallback = fallbackFor(variant)
@@ -591,6 +598,26 @@ export function apply(ctx: Context, config: Config): void {
   // Same-origin routes backing each Plugin-configuration card; the webServer
   // service is optional (a headless profile serves no browser).
   const probeKey = createProbeKey()
+  /**
+   * The in-process key authorizing sign-in writes, minted separately from the
+   * probe key.
+   *
+   * Separate keys rather than one shared secret because the two authorize
+   * different powers: one spends credit on a probe, the other obtains and stores
+   * a credential. A single key handed to both would let a defect in either card
+   * reach the other's authority.
+   */
+  const loginKey = createLoginKey()
+  /** The device-authorization client; one instance serves both realms. */
+  const loginClient = new WorkBuddyLoginClient()
+  /**
+   * The one in-flight sign-in attempt per variant, keyed by provider id.
+   *
+   * One per variant because a second attempt for the same realm would issue a
+   * second state and leave the first polling forever; a user who wants to
+   * restart signs out or reloads, which discards this.
+   */
+  const loginAttempts = new Map<string, WorkBuddyLoginAttempt>()
   let setMaximumContextWindow: ((enabled: boolean) => Promise<{ state: string; reason?: string }>) | undefined
   /**
    * Point a variant at an account identity, invalidating whatever the previous
@@ -673,8 +700,92 @@ export function apply(ctx: Context, config: Config): void {
         catalog: () => catalogSection(runtime),
         probe: () => probeSection(runtime, current().probeConsent === true),
         probeKey,
+        loginKey,
         ...runtime.variant.id === CN_VARIANT.id ? {} : { useMaximumContextWindow: () => current().useMaximumContextWindow === true },
       })
+      registerWorkBuddyLoginRoute(webCtx, {
+        path: runtime.variant.loginPath,
+        begin: async () => {
+          // Replace rather than join an existing attempt: a user who pressed
+          // sign-in again wants a fresh URL, and the previous state is already
+          // unreachable from the card.
+          const previous = loginAttempts.get(runtime.variant.id)
+          if (previous !== undefined) loginClient.forget(previous.state)
+          const attempt = await loginClient.begin(runtime.variant.region)
+          loginAttempts.set(runtime.variant.id, attempt)
+          return { state: attempt.state, url: attempt.authUrl }
+        },
+        poll: async state => {
+          const attempt = loginAttempts.get(runtime.variant.id)
+          if (attempt === undefined || attempt.state !== state) {
+            return { status: 'failed', message: 'this sign-in attempt is no longer active; start again' }
+          }
+          const outcome = await loginClient.poll(attempt)
+          if (outcome.status === 'pending') return { status: 'pending', state }
+          loginClient.forget(state)
+          loginAttempts.delete(runtime.variant.id)
+          const region = resolveLoginRegion(runtime.variant.region, outcome.tokens.domain)
+          const credential: WorkBuddyCredential = {
+            accessToken: outcome.tokens.accessToken,
+            refreshToken: outcome.tokens.refreshToken,
+            // A zero `expiresIn` leaves the credential with no usable expiry,
+            // which the store treats as "refresh now" — the honest reading of an
+            // upstream that declined to say when the token dies.
+            expiresAtMs: outcome.tokens.expiresInSec > 0 ? Date.now() + outcome.tokens.expiresInSec * 1000 : 0,
+            domain: outcome.tokens.domain,
+            uid: outcome.account.uid,
+            ...outcome.account.enterpriseId === undefined ? {} : { enterpriseId: outcome.account.enterpriseId },
+            ...outcome.account.nickname === undefined ? {} : { nickname: outcome.account.nickname },
+            source: WORKBUDDY_CREDENTIAL_SOURCE,
+          }
+          // The realm the credential actually belongs to decides which store may
+          // hold it: a login against the international realm that answered with a
+          // CN domain would otherwise be written where it can never be used.
+          if (region !== runtime.variant.region) {
+            return {
+              status: 'failed',
+              message: `this sign-in returned a ${region === 'cn' ? 'WorkBuddy (CN)' : 'WorkBuddy AI'} account,`
+                + ` which belongs to the other provider; sign in from that one's card instead`,
+            }
+          }
+          try {
+            await runtime.store.save(credential)
+          } catch (error: unknown) {
+            return { status: 'failed', message: error instanceof Error ? error.message.slice(0, 300) : String(error) }
+          }
+          // A sign-in is the one transition the sweep would otherwise only notice
+          // on its next tick; adopt it here so the model group appears at once.
+          const identity = credentialIdentity(credential)
+          adoptIdentity(runtime, identity)
+          void fetchCatalog(runtime, identity)
+          return {
+            status: 'complete',
+            ...outcome.account.nickname === undefined ? {} : { nickname: outcome.account.nickname },
+          }
+        },
+        logout: async () => {
+          const attempt = loginAttempts.get(runtime.variant.id)
+          if (attempt !== undefined) loginClient.forget(attempt.state)
+          loginAttempts.delete(runtime.variant.id)
+          await runtime.store.logout()
+          adoptIdentity(runtime, undefined)
+        },
+        importDocument: async document => {
+          // The store validates the realm before writing, so a CN document
+          // offered to the international card is refused with a message naming
+          // the product it belongs to.
+          const credential = await runtime.store.importDocument(document)
+          // Publishing the account is the same transition a completed sign-in
+          // performs, so the model group appears without waiting for the sweep.
+          const identity = credentialIdentity(credential)
+          adoptIdentity(runtime, identity)
+          void fetchCatalog(runtime, identity)
+          return {
+            ...credential.uid === '' ? {} : { uid: credential.uid },
+            ...credential.nickname === undefined ? {} : { nickname: credential.nickname },
+          }
+        },
+      }, loginKey)
       registerWorkBuddyProbeRoute(webCtx, {
         path: runtime.variant.probePath,
         probe: async modelId => {
@@ -746,9 +857,7 @@ export function apply(ctx: Context, config: Config): void {
     }
     /** Merge both sections into the whole config the rest of the plugin reads. */
     const merged = (): Config => ({
-      ...sources.cn().authFile === undefined ? {} : { authFile: sources.cn().authFile },
       ...sources.cn().probeConsent === undefined ? {} : { probeConsent: sources.cn().probeConsent },
-      ...sources.ai().authFileAI === undefined ? {} : { authFileAI: sources.ai().authFileAI },
       ...sources.ai().useMaximumContextWindow === undefined ? {} : { useMaximumContextWindow: sources.ai().useMaximumContextWindow },
     })
     const applyMaximumContextWindow = (next: Config): void => {
@@ -756,11 +865,7 @@ export function apply(ctx: Context, config: Config): void {
       if (runtime?.catalog.setUseMaximumContextWindow(next.useMaximumContextWindow === true)) runtime.invalidate()
     }
     const repointStores = (): void => {
-      const next = merged()
-      applyMaximumContextWindow(next)
-      for (const runtime of runtimes) {
-        runtime.store.setDesktopPath(configuredAuthFile(next, runtime.variant))
-      }
+      applyMaximumContextWindow(merged())
     }
     settingsCtx.settings.installSection(ctx, WORKBUDDY_SETTINGS_NS, CN_SECTION, config, {
       setSource(source) { sources.cn = source as () => Config; current = merged },

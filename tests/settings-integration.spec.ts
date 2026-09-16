@@ -7,6 +7,7 @@ import LlmRuntime from '@deepseek-ai/dsh-llm'
 import SettingsProvider from '@deepseek-ai/dsh-settings'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import * as WorkBuddy from '../src/index.ts'
+import { AI_VARIANT, CN_VARIANT } from '../src/variants.ts'
 
 class MemorySettings extends SettingsProvider {
   readonly writable = true
@@ -25,7 +26,7 @@ class MemorySettings extends SettingsProvider {
 let context: Context | undefined
 let root: string | undefined
 
-/** A desktop-shaped credential document for one upstream region. */
+/** A credential document for one upstream region, as a login would store it. */
 function credentialDocument(domain: string): string {
   return JSON.stringify({
     auth: { accessToken: 'at', refreshToken: 'rt', expiresAt: Date.now() + 3_600_000, domain },
@@ -46,12 +47,13 @@ describe('WorkBuddy Host settings integration', () => {
   it('restores the saved maximum-window preference after restarting and can disable it', async () => {
     root = await mkdtemp(join(tmpdir(), 'workbuddy-context-restart-'))
     const settingsFile = join(root, 'settings.json')
-    const aiFile = join(root, 'ai.info')
+    const aiAuthPath = join(root, AI_VARIANT.ownFilename)
     await writeFile(settingsFile, '{}')
-    await writeFile(aiFile, credentialDocument('www.workbuddy.ai'))
+    await writeFile(aiAuthPath, credentialDocument('www.workbuddy.ai'))
     vi.stubEnv('DSH_HOME', root)
-    vi.stubEnv('WORKBUDDY_AUTH_FILE', join(root, 'absent-cn.info'))
-    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', aiFile)
+    // The plugin keeps its files in a per-profile folder; point that at the same
+    // temporary root so the credential path is the one this spec writes.
+    vi.stubEnv(WorkBuddy.WORKBUDDY_DATA_DIR_ENV, root)
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline in tests') }))
     class FileSettings extends SettingsProvider {
       readonly writable = true
@@ -98,14 +100,16 @@ describe('WorkBuddy Host settings integration', () => {
   it('exposes the provider directory entry, the settings section, and the fallback model list', async () => {
     root = await mkdtemp(join(tmpdir(), 'dsh-workbuddy-connect-settings-'))
     vi.stubEnv('DSH_HOME', root)
+    // The plugin keeps its files in a per-profile folder; point that at the same
+    // temporary root so the credential path is the one this spec writes.
+    vi.stubEnv(WorkBuddy.WORKBUDDY_DATA_DIR_ENV, root)
     // This case asserts the CN fallback roster, which is served only to a
     // signed-in variant. Pinning a credential of its own keeps that independent
-    // of whether this machine happens to have the WorkBuddy desktop app signed
-    // in: without it the store probes the ambient desktop file and the group
-    // stays hidden (empty model list) on a clean machine and on CI.
-    const cnFile = join(root, 'cn.info')
-    await writeFile(cnFile, credentialDocument('copilot.tencent.com'))
-    vi.stubEnv('WORKBUDDY_AUTH_FILE', cnFile)
+    // of anything else on this machine: the store reads the plugin's own file
+    // under `$DSH_HOME`, and without one the group stays hidden (empty model
+    // list) rather than serving the roster.
+    const cnAuthPath = join(root, CN_VARIANT.ownFilename)
+    await writeFile(cnAuthPath, credentialDocument('copilot.tencent.com'))
     // Signing in would otherwise make this case perform a real request to the CN
     // catalog endpoint. These tests must not touch the network, and the roster
     // asserted below is the compiled-in fallback, so the fetch is stubbed to
@@ -170,10 +174,14 @@ describe('WorkBuddy Host settings integration', () => {
     expect(modalities.get('auto')).toContain('image')
     expect(modalities.get('glm-5.1')).toEqual(['text'])
 
-    // A settings write validates against the schema and persists.
-    await ctx.settings.update(WorkBuddy.WORKBUDDY_SETTINGS_NS, { authFile: '/tmp/other-workbuddy.info' })
+    // A settings write validates against the schema and persists. The CN
+    // section owns one field — `probeConsent` — so that is the write to make,
+    // and the stored value is read back both through the live descriptor and
+    // through the section's own document.
+    await ctx.settings.update(WorkBuddy.WORKBUDDY_SETTINGS_NS, { probeConsent: true })
     const updated = ctx.settings.describe().find(entry => entry.ns === WorkBuddy.WORKBUDDY_SETTINGS_NS)
-    expect((updated?.value as Record<string, unknown>)['authFile']).toBe('/tmp/other-workbuddy.info')
+    expect((updated?.value as Record<string, unknown>)['probeConsent']).toBe(true)
+    expect(ctx.settings.get(WorkBuddy.WORKBUDDY_SETTINGS_NS)).toMatchObject({ probeConsent: true })
   })
 
   /**
@@ -185,18 +193,18 @@ describe('WorkBuddy Host settings integration', () => {
   it('registers both variants and keeps each variant identity separate', async () => {
     root = await mkdtemp(join(tmpdir(), 'dsh-workbuddy-connect-dual-'))
     vi.stubEnv('DSH_HOME', root)
-    // Shorten the credential sweep: the assertions below change a setting and
-    // then wait for the group to react, which only happens on a sweep.
+    // The plugin keeps its files in a per-profile folder; point that at the same
+    // temporary root so the credential path is the one this spec writes.
+    vi.stubEnv(WorkBuddy.WORKBUDDY_DATA_DIR_ENV, root)
+    // Shorten the credential sweep: a group appears only once the sweep has
+    // adopted the credential it finds in the temporary home.
     vi.stubEnv('DSH_WORKBUDDY_POLL_MS', '100')
-    // One real-shaped credential per product, in separate files. The upstream
-    // fetch is stubbed to fail so the assertion covers the per-variant fallback
-    // rosters rather than depending on the network.
-    const cnFile = join(root, 'cn.info')
-    const aiFile = join(root, 'ai.info')
-    await writeFile(cnFile, credentialDocument('copilot.tencent.com'))
-    await writeFile(aiFile, credentialDocument('www.workbuddy.ai'))
-    vi.stubEnv('WORKBUDDY_AUTH_FILE', cnFile)
-    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', aiFile)
+    // One real-shaped credential per product, each in the file its own variant
+    // owns under the Harness home. The upstream fetch is stubbed to fail so the
+    // assertion covers the per-variant fallback rosters rather than depending on
+    // the network.
+    await writeFile(join(root, CN_VARIANT.ownFilename), credentialDocument('copilot.tencent.com'))
+    await writeFile(join(root, AI_VARIANT.ownFilename), credentialDocument('www.workbuddy.ai'))
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline in tests') }))
 
     const ctx = new Context()
@@ -234,45 +242,36 @@ describe('WorkBuddy Host settings integration', () => {
     expect(served).toContain(WorkBuddy.WORKBUDDY_AI_SETTINGS_NS)
 
     // Each section owns only its own fields, so one card's form cannot edit the
-    // other's path. `describe()` reports the schema as schemastery's ref graph;
-    // the root object's `dict` is the field map.
+    // other's preference. `describe()` reports the schema as schemastery's ref
+    // graph; the root object's `dict` is the field map.
     const fieldsOf = (ns: string): string[] => {
       const descriptor = ctx.settings.describe().find(entry => entry.ns === ns)
       const root = (descriptor?.schema as { refs?: Record<string, { dict?: Record<string, unknown> }>, uid?: string } | undefined)?.refs?.[String((descriptor?.schema as { uid?: number } | undefined)?.uid)]
       return Object.keys(root?.dict ?? {})
     }
-    expect(fieldsOf('workbuddy')).toContain('authFile')
-    expect(fieldsOf('workbuddy')).not.toContain('authFileAI')
-    expect(fieldsOf('workbuddy-ai')).toEqual(['authFileAI', 'useMaximumContextWindow'])
+    // No credential-path field survives on either card: a credential is obtained
+    // by signing in and stored by the plugin, so there is nothing left to point
+    // at a file.
+    expect(fieldsOf('workbuddy')).toEqual(['probeConsent'])
+    expect(fieldsOf('workbuddy-ai')).toEqual(['useMaximumContextWindow'])
 
-    // A write through one section must reach ONLY that variant's store. The
-    // schema assertions above prove the two forms are split; this proves the
-    // wiring behind them is too. Without it, a section could carry the right
-    // field while `onChange` handed it to the wrong store and nothing above
-    // would notice.
+    // A write through one section must reach only THAT variant. The schema
+    // assertions above prove the two forms are split; this proves the wiring
+    // behind them is too. Without it, a section could carry the right field
+    // while `onChange` handed it to the wrong variant and nothing above would
+    // notice.
     //
-    // Observable chosen deliberately: point `authFileAI` at a file holding a
-    // CN-domain credential. If the write really reached the AI store, that
-    // store refuses the cross-product credential and the AI group empties; the
-    // CN group must be untouched. A mis-routed write would instead empty the
-    // CN group — so the assertion distinguishes "reached the AI store" from
-    // "reached some store".
-    const wrongRegionForAi = join(root, 'cn-credential-for-ai.info')
-    await writeFile(wrongRegionForAi, credentialDocument('copilot.tencent.com'))
-    await ctx.settings.update('workbuddy-ai', { authFileAI: wrongRegionForAi })
-    // A bounded settle rather than waitFor: if the wiring were broken the group
-    // would simply never change, and an assertion states that plainly instead
-    // of surfacing as a timeout. Two sweeps at the 100 ms interval above.
-    await new Promise(resolve => setTimeout(resolve, 400))
-    expect(await ctx.llm.listModels('workbuddy-ai')).toEqual([])
-    expect((await ctx.llm.listModels('workbuddy')).length).toBeGreaterThan(0)
-
-    // And the setting is genuinely read back through the merged config: putting
-    // a valid international file back restores the group.
-    await ctx.settings.update('workbuddy-ai', { authFileAI: aiFile })
+    // Observable chosen deliberately: `useMaximumContextWindow` is the only
+    // setting that changes a served model. It selects a larger declared window,
+    // and only the international variant exposes it, so the AI provider's
+    // window must move while the CN provider's — a model that declares no
+    // alternatives at all — stays exactly where it was. A mis-routed switch
+    // would move the CN provider instead.
+    await ctx.settings.update('workbuddy-ai', { useMaximumContextWindow: false })
     await vi.waitFor(async () => {
-      expect((await ctx.llm.listModels('workbuddy-ai')).length).toBeGreaterThan(0)
-    }, { timeout: 10_000 })
+      expect((await ctx.llm.resolveModelInfo('workbuddy-ai', 'deepseek-v4.1-flash')).context?.contextWindow).toBe(300_000)
+    })
+    expect((await ctx.llm.resolveModelInfo('workbuddy', 'deepseek-v4.1-flash')).context?.contextWindow).toBe(1_000_000)
 
     await vi.waitFor(async () => {
       expect((await ctx.llm.listModels('workbuddy')).length).toBeGreaterThan(0)
@@ -289,15 +288,6 @@ describe('WorkBuddy Host settings integration', () => {
     expect(ai).not.toContain('minimax-m3')
     expect(ai).toContain('gpt-5.6-luna')
     expect(cn).not.toContain('gpt-5.6-luna')
-
-    // The preference is on by default: a profile that never touched the setting
-    // gets the largest declared window, and an explicit opt-out restores the
-    // upstream's own default.
-    expect((await ctx.llm.resolveModelInfo('workbuddy-ai', 'deepseek-v4.1-flash')).context?.contextWindow).toBe(1_000_000)
-    await ctx.settings.update('workbuddy-ai', { useMaximumContextWindow: false })
-    await vi.waitFor(async () => {
-      expect((await ctx.llm.resolveModelInfo('workbuddy-ai', 'deepseek-v4.1-flash')).context?.contextWindow).toBe(300_000)
-    })
   })
 
   /**
@@ -308,9 +298,12 @@ describe('WorkBuddy Host settings integration', () => {
    */
   it('hides a variant with no usable credential while still registering it', async () => {
     root = await mkdtemp(join(tmpdir(), 'dsh-workbuddy-connect-empty-'))
+    // The temporary home is empty: neither variant's own credential file exists,
+    // which is what "nobody has signed in" now means.
     vi.stubEnv('DSH_HOME', root)
-    vi.stubEnv('WORKBUDDY_AUTH_FILE', join(root, 'absent-cn.info'))
-    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'absent-ai.info'))
+    // The plugin keeps its files in a per-profile folder; point that at the same
+    // temporary root so the credential path is the one this spec writes.
+    vi.stubEnv(WorkBuddy.WORKBUDDY_DATA_DIR_ENV, root)
     const ctx = new Context()
     context = ctx
     await ctx.plugin(LlmRuntime)
@@ -341,12 +334,14 @@ describe('WorkBuddy Host settings integration', () => {
   it('refuses a cross-product credential instead of using it', async () => {
     root = await mkdtemp(join(tmpdir(), 'dsh-workbuddy-connect-cross-'))
     vi.stubEnv('DSH_HOME', root)
-    // The CN file is handed to the international provider, which is exactly the
-    // misconfiguration a user can produce with authFileAI / the env var.
-    const crossFile = join(root, 'wrong.info')
-    await writeFile(crossFile, credentialDocument('copilot.tencent.com'))
-    vi.stubEnv('WORKBUDDY_AUTH_FILE', join(root, 'absent-cn.info'))
-    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', crossFile)
+    // The plugin keeps its files in a per-profile folder; point that at the same
+    // temporary root so the credential path is the one this spec writes.
+    vi.stubEnv(WorkBuddy.WORKBUDDY_DATA_DIR_ENV, root)
+    // A WorkBuddy (CN) credential written into the international variant's own
+    // credential file. There is no path setting left to point somewhere else, so
+    // this — one product's credential in the other's file — is the mistyped or
+    // copied state the region check still has to refuse.
+    await writeFile(join(root, AI_VARIANT.ownFilename), credentialDocument('copilot.tencent.com'))
     const ctx = new Context()
     context = ctx
     await ctx.plugin(LlmRuntime)

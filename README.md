@@ -4,20 +4,22 @@
 [English](./README.en.md) | 中文
 
 
-将 WorkBuddy 桌面 App 中包含的各种模型（GLM-5.3、GLM-5.2、DeepSeek-V4-Pro、DeepSeek-V4-Flash、Kimi-K3、MiniMax-M3 、Hy3等）自动接入 DeepSeek Harness，实现在 DSH 对话窗口里零配置使用。
+将 WorkBuddy 的模型（GLM-5.3、GLM-5.2、DeepSeek-V4-Pro、DeepSeek-V4-Flash、Kimi-K3、MiniMax-M3、Hy3 等）接入 DeepSeek Harness，在 DSH 对话窗口里直接使用。
 
-国内版 **WorkBuddy** 与国际版 **WorkBuddy AI** 同时支持（国际版自 **v0.5.0** 起）：装哪个 App 就出现哪个模型分组，两个都装就两组并存，各自用自己的账号与积分。
+国内版 **WorkBuddy** 与国际版 **WorkBuddy AI** 同时支持：登录哪一版就出现哪一版的分组，两版都登录就两组并存，各自用自己的账号与积分。
+
+**插件自己完成登录**，不需要安装 WorkBuddy 桌面 App：在设置卡片点「登录」，或在终端运行 `dsh-workbuddy-connect login`，在浏览器里完成授权即可。已有 `workbuddy.json` 的用户也可以直接导入。
 
 
 ## 功能
 
-- **开箱即用**：安装和启用插件后，在 DSH 中直接使用，无需额外配置。
+- **登录即用**：安装后在卡片上登录一次，模型分组立刻出现；之后访问令牌自动续期，无需再管。
 
 
 ![WorkBuddy 模型出现在 DSH 模型选择器中](assets/1.png)
 
 
-- **国内版与国际版并存**：国内版显示为「WorkBuddy」分组，国际版（WorkBuddy AI）显示为「WorkBuddy AI」分组。两版的模型、账号和积分互不混用。**各自只看自己那版 App 的登录状态**：只装国际版就只出现「WorkBuddy AI」，两版都装就两组都在，退出其中一版则对应分组消失。设置里也是**两张卡片**，分别展示各自的账号与余额。
+- **国内版与国际版并存**：国内版显示为「WorkBuddy」分组，国际版（WorkBuddy AI）显示为「WorkBuddy AI」分组。两版的模型、账号和积分互不混用。**两版各自独立登录**：只登录国际版就只出现「WorkBuddy AI」，两版都登录就两组都在，退出其中一版则对应分组消失。设置里也是**两张卡片**，分别展示各自的账号、余额与登录按钮。
 
 ![WorkBuddy AI 模型出现在 DSH 模型选择器中](assets/5.png)
 
@@ -54,46 +56,73 @@ WorkBuddy 中模型的推理档位信息目前分散在上游接口与客户端�
 
 因此，对于没有声明档位的模型，Web 和 Desktop 采用用户主动授权触发、动态获取档位的方式：先确认上游会校验该参数，再逐项确认哪些规范档位被接受。检测会发送少量请求，可能消耗积分；结果只表示当前上游接受该档位，不承诺它一定改变推理效果、速度或积分消耗。
 
+## 从 0.5.x 升级到 0.6.0（重要）
+
+**0.6.0 改变了凭据的来源，是一次破坏性升级，请先读完这一段。**
+
+| | 0.5.x（旧） | 0.6.0（新） |
+|---|---|---|
+| 凭据来源 | 读 WorkBuddy 桌面 App 写的本地 auth 文件 | **插件自己登录**（设备授权流程） |
+| 是否要装桌面 App | 要 | **不要** |
+| 凭据位置 | `$DSH_HOME/.workbuddy-auth.json` | `$DSH_HOME/profiles/<profile>/.dsh-workbuddy-connect/` |
+| 设置项 `authFile` / `authFileAI` | 有 | **已移除** |
+
+升级后你需要**重新登录一次**，旧的文件不会被读取：
+
+```sh
+# 卡片上点「登录」，或：
+dsh plugin --profile web exec dsh-workbuddy-connect login
+```
+
+**已有 `workbuddy.json`？** 可以不必走浏览器，直接导入即可（卡片上的「选择文件…」，或 `import --file`）。格式与旧文件完全一致，`expiresAt` 为**秒**：
+
+```json
+{
+  "auth": { "accessToken": "…", "refreshToken": "…", "expiresAt": 1794051445, "domain": "copilot.tencent.com" },
+  "account": { "uid": "…", "nickname": "…" },
+  "region": "cn"
+}
+```
+
+导入时会校验区域：把国际版凭证导给国内版会被拒绝，并提示该用哪个 `--provider`。
+
 ## 安装
 
-前置：已安装并登录 WorkBuddy 桌面 App。插件复用 App 的登录状态，账号切换自动跟随；装了国际版 WorkBuddy AI 的同样适用，两版互不影响。
+前置：无需安装 WorkBuddy 桌面 App。插件自己完成登录——在设置卡片里点「登录」，或在终端运行 `dsh-workbuddy-connect login`，浏览器完成后凭据即写入插件自己的文件。国内版与国际版各自独立登录，互不影响。
 
 **版本对应（重要）**：本插件与 DSH 核心版本一一对应，不可混用——不匹配的组合会导致 DSH 启动失败：
 
 | 插件版本 | 要求的 DSH 核心 | 桌面 App |
 |---|---|---|
-| **0.3.2+**（国际版支持自 `0.5.0`） | `0.1.5-rc.1` 及以上 | `2.0.7`+（内置核心已跟进 `0.1.5-rc.1`） |
+| **0.6.0+** | `0.1.5-rc.1` 及以上 | 不需要 |
+| **0.3.2 – 0.5.x**（国际版支持自 `0.5.0`） | `0.1.5-rc.1` 及以上 | `2.0.7`+（内置核心已跟进 `0.1.5-rc.1`） |
 | **0.3.0 – 0.3.1** | `0.1.2-rc.1` | `2.0.5` |
 | **0.2.6** | `0.1.1-rc.2`（旧线） | `2.0.3` / `2.0.4` |
 
-- DSH `0.1.5-rc.1` 及以上的用户，正常安装最新版即可：`dsh plugin --profile web add dsh-workbuddy-connect`
-- 还在用 DSH `0.1.2-rc.1` 的用户，请停留在 `0.3.1`：`dsh plugin --profile web add dsh-workbuddy-connect@0.3.1`
-- 还在用 DSH `0.1.1-rc.2` 的用户，请停留在 `0.2.6`：`dsh plugin --profile web add dsh-workbuddy-connect@0.2.6`
-- 桌面 App 自 `2.0.7` 起内置核心已是 `0.1.5-rc.1`，可直接使用 `0.3.2` 及以上版本；`2.0.5` 及更早的 App（内置 `0.1.2-rc.1`）请继续使用 `0.3.1`
+- 需要 DSH `0.1.5-rc.1` 及以上。`0.3.2` – `0.5.x` 那几个版本以桌面 App 内置核心为准；本版不再依赖桌面 App。
+- 本仓库从 GitHub 安装，安装时会构建；仓库已提交 `lib/` 预构建产物，无需本地构建。
 
 插件在三种 DSH 界面下均可运行：**Web**、**Desktop**、**TUI**。根据你使用的 profile 选对应命令安装。
 
 ```sh
-# Web（推荐，自带预构建产物）
-dsh plugin --profile web add dsh-workbuddy-connect
-dsh web
-
-# 或从 GitHub 源码安装 Web 版
-dsh plugin --profile web add github:corrinehu/dsh-workbuddy-connect
+# Web（推荐）
+dsh plugin --profile web add github:masknull/dsh-workbuddy-connect
 dsh web
 ```
 
 ```sh
 # Desktop（DSH Desktop 桌面版）
-dsh plugin --profile desktop add dsh-workbuddy-connect
+dsh plugin --profile desktop add github:masknull/dsh-workbuddy-connect
 dsh --profile desktop
 ```
 
 ```sh
 # TUI（终端界面）
-dsh plugin --profile dsh-tui add dsh-workbuddy-connect
+dsh plugin --profile dsh-tui add github:masknull/dsh-workbuddy-connect
 dsh --profile dsh-tui
 ```
+
+需要某个具体版本时用 tag 指定，例如 `github:masknull/dsh-workbuddy-connect#v0.6.0`。
 
 > **TUI 用户请注意版本搭配**：终端界面插件 `@deepseek-harness-tui/dsh-tui` 需要 **`0.10.0-beta.5` 及以上**（更早的版本装了本插件会启动失败，报 `events is not iterable`）。请先用 TUI 自带的更新方式把壳升到 beta.5 及以上，再安装本插件；当前最新的是 beta 版，正式版发布后同样可用。
 
@@ -101,27 +130,50 @@ dsh --profile dsh-tui
 
 > 提示：`dsh-tui` profile 需用 pnpm 11 安装（PATH 里是其他版本会报 `ERR_PNPM_UNEXPECTED_STORE`，用 `npx pnpm@11` 即可）。
 
-安装后，在对应界面的模型选择器里切换到 WorkBuddy 模型即可使用。Web 和 Desktop 下，设置卡片可查看账号信息、令牌有效期与剩余积分，手动刷新模型列表，并手动检测符合条件模型的推理档位；国内版与国际版各有自己的卡片。TUI 下可在 `/settings` 里配置 `authFile`（国际版为 `authFileAI`）。
+安装后，在对应界面的模型选择器里切换到 WorkBuddy 模型即可使用。Web 和 Desktop 下，设置卡片可查看账号信息、令牌有效期与剩余积分，手动刷新模型列表，并手动检测符合条件模型的推理档位。**未登录时**卡片提供「登录」（打开浏览器完成授权后自动生效）与「选择文件…」（导入已有的 `workbuddy.json`）；**已登录时**提供「切换账号」（丢弃当前凭据并立即重新登录）与「退出登录」。国内版与国际版各有自己的卡片，各自独立登录。
 
 ## 命令行
+
+`dsh plugin --profile <web|desktop|dsh-tui> exec dsh-workbuddy-connect login`：在浏览器中完成登录（打印授权链接，完成后自动写入凭据）。适用于没有浏览器卡片的环境，如 TUI。
+
+`dsh plugin --profile <web|desktop|dsh-tui> exec dsh-workbuddy-connect import --file <path>`：导入已有的凭证文件（格式同 `workbuddy.json`）。`--file -` 从标准输入读取，便于管道传入。
 
 `dsh plugin --profile <web|desktop|dsh-tui> exec dsh-workbuddy-connect status`：登录状态与剩余积分（`--json` 输出机器可读格式；另有 `doctor` 诊断、`logout` 清理凭据）。
 
 默认操作国内版；加 `--provider workbuddy-ai` 操作国际版：
 
 ```sh
+dsh plugin --profile web exec dsh-workbuddy-connect login --provider workbuddy-ai
+dsh plugin --profile web exec dsh-workbuddy-connect import --provider workbuddy-ai --file ./workbuddy-global.json
 dsh plugin --profile web exec dsh-workbuddy-connect status --provider workbuddy-ai
 dsh plugin --profile web exec dsh-workbuddy-connect doctor --provider workbuddy-ai
 ```
 
-`logout` 只删除该版插件自留的凭据副本，不动桌面 App 自己的登录，也不承诺一定让模型分组消失（App 的凭据文件仍在时依然生效）。
+### 凭证存放位置
+
+按 profile 隔离，放在 `$DSH_HOME/profiles/<profile>/.dsh-workbuddy-connect/` 下（默认即 `~/.dsh/profiles/web/.dsh-workbuddy-connect/`）：
+
+| 文件 | 对应 |
+|---|---|
+| `.workbuddy-auth.json` | 国内版 |
+| `.workbuddy-ai-auth.json` | 国际版 |
+
+**profile 目录怎么确定的**：DSH 没有把当前 profile 名暴露给插件，所以插件会在 `$DSH_HOME/profiles/` 下找**声明了本插件的 profile**（读各 profile 的 `package.json`）；若有多个都声明了，再用"该 profile 里安装的这份插件是否指向当前这份代码"来消歧。这样 web / desktop / tui 各自独立、互不干扰。
+
+若一个都确定不了（例如直接从源码 checkout 运行），回落到 `$DSH_HOME/.dsh-workbuddy-connect/`；环境变量 `DSH_WORKBUDDY_DATA_DIR` 可显式覆盖。
+
+每个目录下只有凭证 `.json` 本身，**没有 `.lock` 或临时文件残留**（写入用临时文件 + rename 原子替换）。
+
+`logout` 只删除对应版本自己的那个文件，不影响另一版。
 
 ## 已知限制
 
-- 在 macOS 的 DSH Web / Desktop / TUI 下验证通过（0.3.2 起要求 `0.1.5-rc.1`+、Node 22+；TUI 需终端界面插件 `0.10.0-beta.5` 及以上，见安装章节说明）。Windows 会依次探测 Local 与 Roaming AppData；WSL 会优先从挂载的 Windows 用户目录读取登录凭据。若 Windows 与 Linux 用户名不同且 Windows 环境变量未传入 WSL，请通过 `WORKBUDDY_AUTH_FILE`（国际版为 `WORKBUDDY_AI_AUTH_FILE`）指定实际位置。
+- **本版验证环境**：Windows + DSH Web。已验证真实登录（国内版与国际版都能取到授权链接，轮询状态正确）、`workbuddy.json` 导入、两版账号与积分各自独立读取；设置卡片在折叠/悬停/展开各状态下与 DSH 内置卡片逐属性样式一致。其余平台未在本版复跑。
+- 要求 DSH `0.1.5-rc.1`+、Node 22+；TUI 需终端界面插件 `0.10.0-beta.5` 及以上（见安装章节）。凭据由插件自己登录获得，与 WorkBuddy 桌面 App 是否安装、装在哪里都无关。
+- **国际版登录在部分网络下不可达**：`www.workbuddy.ai` 在国内部分网络无法访问，此时国际版登录会失败并报出原因，国内版不受影响。
 - **国际版的模型目录来自 App 界面接口**：服务端按 User-Agent 分流下发，属私有实现，上游改动可能使其失效。届时插件按「本账号上次成功目录 → 内置目录」降级，并在卡片上标明来源（实时 / 已保存 / 内置）、更新时间与失败原因，但不能保证长期兼容。国内版目录走官方 CLI 同款接口，不受此影响。
-- **国际版仍未覆盖的环境**：Windows / WSL / Linux 下国际版 App 的版本读取尚未找到可靠来源，会退回最近保存的版本或内置值。macOS 上已通过真实 shim 验证 GPT 系完整回复、工具调用与续轮。
-- **无凭据时的行为变化**：某版 App 从未登录、也没留下插件自留副本时，该版模型分组不再显示。此前国内版会显示一份内置兜底列表，但那些模型选了必然报错。
+- **国际版目录的 User-Agent 版本**：Windows / WSL / Linux 下读不到国际版 App 的版本，会退回最近保存的版本或内置值；这与登录无关，登录不依赖桌面 App。
+- **无凭据时的行为**：某一版从未登录过时，该版模型分组不显示——此时该版没有可用凭据，列出模型只会让每一次调用都失败。登录后分组立即出现。
 - **企业账号积分目前仅覆盖国内版**：国际版企业账号的计费接口尚未验证，仍按个人版接口读取；待有实测结论后再扩展。企业账号分支在本机无法自测（开发机为个人账号），依据官方 App 的接口契约实现，欢迎企业账号用户反馈实测结果。
 - 依赖 WorkBuddy 客户端接口（非官方开放 API），WorkBuddy 更新后插件可能需要随之调整。
 
@@ -134,8 +186,10 @@ dsh plugin --profile web exec dsh-workbuddy-connect doctor --provider workbuddy-
 
 ## 致谢
 
-- [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api)（MIT）— WorkBuddy 上游协议的参照实现。
+- [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api)（MIT）— WorkBuddy 上游协议的参照实现。0.6.0 的登录流程与上游调用（请求头、请求体改写、端点选择、错误分类）均以该实现为准。
+- [zqcccc/workbuddy-cliproxy](https://github.com/zqcccc/workbuddy-cliproxy) — 设备授权登录流程的早期参照。
 - [franksong2702/dsh-codex-connect](https://github.com/franksong2702/dsh-codex-connect)（Apache-2.0）— DSH 插件结构与 provider 注册的参照。
+- [corrinehu/dsh-workbuddy-connect](https://github.com/corrinehu/dsh-workbuddy-connect) — 本仓库的上游。
 
 ## 许可证
 

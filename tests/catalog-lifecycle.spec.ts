@@ -131,11 +131,12 @@ async function boot(): Promise<Context> {
 describe('catalog lifecycle', () => {
   it('serves a live catalog once the first fetch succeeds', async () => {
     const root = await tempDir()
-    const cnFile = join(root, 'cn.info')
-    await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-a'))
+    const cnPath = join(root, '.workbuddy-auth.json')
+    await writeFile(cnPath, credentialDocument('copilot.tencent.com', 'uid-a'))
     vi.stubEnv('DSH_HOME', root)
-    vi.stubEnv('WORKBUDDY_AUTH_FILE', cnFile)
-    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'absent.info'))
+    // The plugin keeps its files in a per-profile folder; point that at the same
+    // temporary root so the credential path is the one these specs write.
+    vi.stubEnv(WorkBuddy.WORKBUDDY_DATA_DIR_ENV, root)
     vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(catalogEnvelope('live-model', 'Live Model'))))
 
     const ctx = await boot()
@@ -148,11 +149,12 @@ describe('catalog lifecycle', () => {
 
   it('keeps the fallback roster and retries after a failed fetch', async () => {
     const root = await tempDir()
-    const cnFile = join(root, 'cn.info')
-    await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-a'))
+    const cnPath = join(root, '.workbuddy-auth.json')
+    await writeFile(cnPath, credentialDocument('copilot.tencent.com', 'uid-a'))
     vi.stubEnv('DSH_HOME', root)
-    vi.stubEnv('WORKBUDDY_AUTH_FILE', cnFile)
-    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'absent.info'))
+    // The plugin keeps its files in a per-profile folder; point that at the same
+    // temporary root so the credential path is the one these specs write.
+    vi.stubEnv(WorkBuddy.WORKBUDDY_DATA_DIR_ENV, root)
 
     let attempts = 0
     vi.stubGlobal('fetch', vi.fn(async () => {
@@ -181,11 +183,12 @@ describe('catalog lifecycle', () => {
 
   it('does not re-fetch the catalog on every credential sweep', async () => {
     const root = await tempDir()
-    const cnFile = join(root, 'cn.info')
-    await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-a'))
+    const cnPath = join(root, '.workbuddy-auth.json')
+    await writeFile(cnPath, credentialDocument('copilot.tencent.com', 'uid-a'))
     vi.stubEnv('DSH_HOME', root)
-    vi.stubEnv('WORKBUDDY_AUTH_FILE', cnFile)
-    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'absent.info'))
+    // The plugin keeps its files in a per-profile folder; point that at the same
+    // temporary root so the credential path is the one these specs write.
+    vi.stubEnv(WorkBuddy.WORKBUDDY_DATA_DIR_ENV, root)
     const request = vi.fn(async () => fakeResponse(catalogEnvelope('live-model', 'Live')))
     vi.stubGlobal('fetch', request)
 
@@ -204,11 +207,12 @@ describe('catalog lifecycle', () => {
 
   it('hides the group when the credential disappears and restores it when it returns', async () => {
     const root = await tempDir()
-    const cnFile = join(root, 'cn.info')
-    await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-a'))
+    const cnPath = join(root, '.workbuddy-auth.json')
+    await writeFile(cnPath, credentialDocument('copilot.tencent.com', 'uid-a'))
     vi.stubEnv('DSH_HOME', root)
-    vi.stubEnv('WORKBUDDY_AUTH_FILE', cnFile)
-    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'absent.info'))
+    // The plugin keeps its files in a per-profile folder; point that at the same
+    // temporary root so the credential path is the one these specs write.
+    vi.stubEnv(WorkBuddy.WORKBUDDY_DATA_DIR_ENV, root)
     vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(catalogEnvelope('live-model', 'Live'))))
 
     const ctx = await boot()
@@ -217,13 +221,13 @@ describe('catalog lifecycle', () => {
     })
 
     // Signing out (file removed) must remove the group, not leave it pickable.
-    await rm(cnFile)
+    await rm(cnPath)
     await vi.waitFor(async () => {
       expect(await ctx.llm.listModels('workbuddy')).toEqual([])
     }, { timeout: 20_000 })
 
     // Signing back in restores it: the provider stayed registered throughout.
-    await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-a'))
+    await writeFile(cnPath, credentialDocument('copilot.tencent.com', 'uid-a'))
     await vi.waitFor(async () => {
       expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['live-model'])
     }, { timeout: 20_000 })
@@ -231,11 +235,12 @@ describe('catalog lifecycle', () => {
 
   it('does not show a previous account catalog after the account switches', async () => {
     const root = await tempDir()
-    const cnFile = join(root, 'cn.info')
-    await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-a'))
+    const cnPath = join(root, '.workbuddy-auth.json')
+    await writeFile(cnPath, credentialDocument('copilot.tencent.com', 'uid-a'))
     vi.stubEnv('DSH_HOME', root)
-    vi.stubEnv('WORKBUDDY_AUTH_FILE', cnFile)
-    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'absent.info'))
+    // The plugin keeps its files in a per-profile folder; point that at the same
+    // temporary root so the credential path is the one these specs write.
+    vi.stubEnv(WorkBuddy.WORKBUDDY_DATA_DIR_ENV, root)
     vi.stubGlobal('fetch', vi.fn(async (_url: unknown, init?: RequestInit) => {
       // Answer per credential: the request carries the account's token, so the
       // second account gets a different roster.
@@ -250,8 +255,9 @@ describe('catalog lifecycle', () => {
       expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['account-a-model'])
     })
 
-    // Switch the desktop app's account in place.
-    await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-b'))
+    // Switch accounts in place: a sign-in for another account overwrites the
+    // plugin's own credential file.
+    await writeFile(cnPath, credentialDocument('copilot.tencent.com', 'uid-b'))
     await vi.waitFor(async () => {
       expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['account-b-model'])
     }, { timeout: 20_000 })
@@ -271,11 +277,12 @@ describe('catalog lifecycle', () => {
    */
   it('manual refresh after an account switch drops the old account data even when it fails', async () => {
     const root = await tempDir()
-    const cnFile = join(root, 'cn.info')
-    await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-a'))
+    const cnPath = join(root, '.workbuddy-auth.json')
+    await writeFile(cnPath, credentialDocument('copilot.tencent.com', 'uid-a'))
     vi.stubEnv('DSH_HOME', root)
-    vi.stubEnv('WORKBUDDY_AUTH_FILE', cnFile)
-    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'absent.info'))
+    // The plugin keeps its files in a per-profile folder; point that at the same
+    // temporary root so the credential path is the one these specs write.
+    vi.stubEnv(WorkBuddy.WORKBUDDY_DATA_DIR_ENV, root)
 
     // Seed a probe observation belonging to account A. The fingerprint must
     // match the row the LIVE catalog serves (the fetch succeeds first here), so
@@ -340,7 +347,7 @@ describe('catalog lifecycle', () => {
     expect(before.catalog.source).toBe('live')
 
     // Switch the account in place, and make the catalog fetch fail.
-    await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-b'))
+    await writeFile(cnPath, credentialDocument('copilot.tencent.com', 'uid-b'))
     failCatalog = true
 
     const failed = await post('/plugins/dsh-workbuddy-connect/probe', key, { action: 'refresh' })
@@ -376,11 +383,12 @@ describe('catalog lifecycle', () => {
 describe('saved catalog', () => {
   it('restores the last successful catalog for the account on a restart with no network', async () => {
     const root = await tempDir()
-    const cnFile = join(root, 'cn.info')
-    await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-1'))
+    const cnPath = join(root, '.workbuddy-auth.json')
+    await writeFile(cnPath, credentialDocument('copilot.tencent.com', 'uid-1'))
     vi.stubEnv('DSH_HOME', root)
-    vi.stubEnv('WORKBUDDY_AUTH_FILE', cnFile)
-    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'absent.info'))
+    // The plugin keeps its files in a per-profile folder; point that at the same
+    // temporary root so the credential path is the one these specs write.
+    vi.stubEnv(WorkBuddy.WORKBUDDY_DATA_DIR_ENV, root)
     vi.stubEnv('DSH_WORKBUDDY_POLL_MS', '100')
 
     // First run: online, so a live catalog lands and is remembered.
@@ -406,11 +414,12 @@ describe('saved catalog', () => {
 describe('identity changes during catalog loading', () => {
   it('does not resurface a signed-out account roster when another account fetch fails', async () => {
     const root = await tempDir()
-    const cnFile = join(root, 'cn.info')
-    await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-a'))
+    const cnPath = join(root, '.workbuddy-auth.json')
+    await writeFile(cnPath, credentialDocument('copilot.tencent.com', 'uid-a'))
     vi.stubEnv('DSH_HOME', root)
-    vi.stubEnv('WORKBUDDY_AUTH_FILE', cnFile)
-    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'absent.info'))
+    // The plugin keeps its files in a per-profile folder; point that at the same
+    // temporary root so the credential path is the one these specs write.
+    vi.stubEnv(WorkBuddy.WORKBUDDY_DATA_DIR_ENV, root)
 
     let fail = false
     vi.stubGlobal('fetch', vi.fn(async (_url: unknown, init?: RequestInit) => {
@@ -426,11 +435,11 @@ describe('identity changes during catalog loading', () => {
       expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['account-a-model'])
     })
 
-    await rm(cnFile)
+    await rm(cnPath)
     await vi.waitFor(async () => { expect(await ctx.llm.listModels('workbuddy')).toEqual([]) })
 
     fail = true
-    await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-b'))
+    await writeFile(cnPath, credentialDocument('copilot.tencent.com', 'uid-b'))
     await vi.waitFor(async () => {
       const ids = (await ctx.llm.listModels('workbuddy')).map(model => model.id)
       expect(ids).not.toContain('account-a-model')
@@ -440,11 +449,12 @@ describe('identity changes during catalog loading', () => {
 
   it('cancels an old-account request and starts one for the newly selected account', async () => {
     const root = await tempDir()
-    const cnFile = join(root, 'cn.info')
-    await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-a'))
+    const cnPath = join(root, '.workbuddy-auth.json')
+    await writeFile(cnPath, credentialDocument('copilot.tencent.com', 'uid-a'))
     vi.stubEnv('DSH_HOME', root)
-    vi.stubEnv('WORKBUDDY_AUTH_FILE', cnFile)
-    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'absent.info'))
+    // The plugin keeps its files in a per-profile folder; point that at the same
+    // temporary root so the credential path is the one these specs write.
+    vi.stubEnv(WorkBuddy.WORKBUDDY_DATA_DIR_ENV, root)
 
     let calls = 0
     let aborted = false
@@ -463,7 +473,7 @@ describe('identity changes during catalog loading', () => {
 
     const ctx = await boot()
     await vi.waitFor(() => { expect(calls).toBe(1) })
-    await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-b'))
+    await writeFile(cnPath, credentialDocument('copilot.tencent.com', 'uid-b'))
 
     await vi.waitFor(async () => {
       expect(calls).toBe(2)
@@ -474,11 +484,12 @@ describe('identity changes during catalog loading', () => {
 
   it('does not save a resolved credential under an identity read before it changed', async () => {
     const root = await tempDir()
-    const cnFile = join(root, 'cn.info')
-    await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-a'))
+    const cnPath = join(root, '.workbuddy-auth.json')
+    await writeFile(cnPath, credentialDocument('copilot.tencent.com', 'uid-a'))
     vi.stubEnv('DSH_HOME', root)
-    vi.stubEnv('WORKBUDDY_AUTH_FILE', cnFile)
-    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'absent.info'))
+    // The plugin keeps its files in a per-profile folder; point that at the same
+    // temporary root so the credential path is the one these specs write.
+    vi.stubEnv(WorkBuddy.WORKBUDDY_DATA_DIR_ENV, root)
     vi.stubGlobal('fetch', vi.fn(async (_url: unknown, init?: RequestInit) => {
       const auth = String((init?.headers as Record<string, string> | undefined)?.['Authorization'] ?? '')
       return fakeResponse(auth.includes('uid-b')
@@ -491,7 +502,7 @@ describe('identity changes during catalog loading', () => {
     vi.spyOn(WorkBuddyCredentialStore.prototype, 'resolve').mockImplementation(async function (this: WorkBuddyCredentialStore) {
       if (!switched) {
         switched = true
-        await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-b'))
+        await writeFile(cnPath, credentialDocument('copilot.tencent.com', 'uid-b'))
       }
       return resolve.call(this)
     })

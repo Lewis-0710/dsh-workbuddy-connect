@@ -2,17 +2,19 @@
 
 English | [中文](./README.md)
 
-Brings every model in the WorkBuddy desktop app (GLM-5.3, GLM-5.2, DeepSeek-V4-Pro, DeepSeek-V4-Flash, Kimi-K3, MiniMax-M3, Hy3, and more) straight into [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) — zero configuration in the DSH chat.
+Brings WorkBuddy's models (GLM-5.3, GLM-5.2, DeepSeek-V4-Pro, DeepSeek-V4-Flash, Kimi-K3, MiniMax-M3, Hy3, and more) into [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), usable straight from the DSH chat.
 
-Both the CN **WorkBuddy** and the international **WorkBuddy AI** apps are supported (international support since **v0.5.0**): whichever one you have installed shows up as its own model group, and having both installed shows both, each with its own account and credit.
+Both the CN **WorkBuddy** and the international **WorkBuddy AI** are supported: whichever one you sign in to appears as its own model group, signing in to both shows both, and each keeps its own account and credit.
+
+**The plugin signs itself in** — the WorkBuddy desktop app is not required. Press **Sign in** on its settings card, or run `dsh-workbuddy-connect login` in a terminal, and finish in the browser. If you already have a `workbuddy.json`, you can import it instead.
 
 ## Features
 
-- **Works out of the box**: install and enable the plugin, then use it directly in DSH — no extra configuration.
+- **Sign in and go**: one sign-in from the card brings the model group up, and the access token renews itself from then on.
 
 ![WorkBuddy models in the DSH model picker](assets/1.png)
 
-- **CN and international side by side**: the CN app appears as the **WorkBuddy** group and the international one as **WorkBuddy AI**. Their models, accounts, and credit never mix. **Each group follows only its own app's sign-in**: install just the international app and only WorkBuddy AI appears; install both and both groups appear; sign out of one and that group goes away. Settings likewise shows **one card per version**, each with its own account and balance.
+- **CN and international side by side**: the CN product appears as the **WorkBuddy** group and the international one as **WorkBuddy AI**. Their models, accounts, and credit never mix. **Each is signed in on its own**: sign in to just the international one and only WorkBuddy AI appears; sign in to both and both groups appear; sign out of one and that group goes away. Settings likewise shows **one card per version**, each with its own account, balance, and sign-in controls.
 
 ![WorkBuddy AI models in the DSH model picker](assets/5.png)
 
@@ -44,46 +46,71 @@ Testing also found that some models accept the `reasoning_effort` parameter whil
 
 For models without declared levels, Web and Desktop instead use user-authorized, on-demand detection: it first confirms that the upstream validates the parameter, then checks which standard levels it accepts. The check sends a few requests and may consume credit. Its result means only that the upstream currently accepts that level; it does not promise a particular change in reasoning quality, speed, or credit use.
 
-## Install
+## Upgrading from 0.5.x to 0.6.0 (important)
 
-Prerequisite: the WorkBuddy desktop app is installed and signed in. The plugin reuses the app's sign-in state and follows account switches automatically; the same applies to the international WorkBuddy AI app, and the two do not affect each other.
+**0.6.0 changes where the credential comes from. It is a breaking upgrade — please read this first.**
+
+| | 0.5.x (old) | 0.6.0 (new) |
+|---|---|---|
+| Credential source | the WorkBuddy desktop app's local auth file | **the plugin's own sign-in** (device authorization) |
+| Desktop app required | yes | **no** |
+| Credential location | `$DSH_HOME/.workbuddy-auth.json` | `$DSH_HOME/profiles/<profile>/.dsh-workbuddy-connect/` |
+| Settings `authFile` / `authFileAI` | present | **removed** |
+
+After upgrading you must **sign in once**; the old file is no longer read:
+
+```sh
+# Press Sign in on the card, or:
+dsh plugin --profile web exec dsh-workbuddy-connect login
+```
+
+**Already have a `workbuddy.json`?** You can skip the browser and import it — **Choose file…** on the card, or `import --file`. The format is unchanged, with `expiresAt` in **seconds**:
+
+```json
+{
+  "auth": { "accessToken": "…", "refreshToken": "…", "expiresAt": 1794051445, "domain": "copilot.tencent.com" },
+  "account": { "uid": "…", "nickname": "…" },
+  "region": "cn"
+}
+```
+
+An import is checked against the target product: offering an international credential to the CN provider is refused with the `--provider` value that would accept it.
+
+## Install
 
 **Match the plugin version to your DSH core** — a mismatched combination fails to start DSH:
 
 | Plugin | Required DSH core | Desktop app |
 |---|---|---|
-| **0.3.2+** (international support since `0.5.0`) | `0.1.5-rc.1` or newer | `2.0.7`+ (bundled core `0.1.5-rc.1`) |
+| **0.6.0+** | `0.1.5-rc.1` or newer | not required |
+| **0.3.2 – 0.5.x** (international support since `0.5.0`) | `0.1.5-rc.1` or newer | `2.0.7`+ (bundled core `0.1.5-rc.1`) |
 | **0.3.0 – 0.3.1** | `0.1.2-rc.1` | `2.0.5` |
 | **0.2.6** | `0.1.1-rc.2` (older line) | `2.0.3` / `2.0.4` |
 
-- On DSH `0.1.5-rc.1` or newer, just install the latest: `dsh plugin --profile web add dsh-workbuddy-connect`
-- Still on DSH `0.1.2-rc.1`? Stay on `0.3.1`: `dsh plugin --profile web add dsh-workbuddy-connect@0.3.1`
-- Still on DSH `0.1.1-rc.2`? Stay on the older release: `dsh plugin --profile web add dsh-workbuddy-connect@0.2.6`
-- The desktop app has bundled `0.1.5-rc.1` since `2.0.7`, so it can use `0.3.2` and newer directly; `2.0.5` and earlier apps (bundled `0.1.2-rc.1`) should stay on `0.3.1`
+- Requires DSH `0.1.5-rc.1` or newer. The `0.3.2` – `0.5.x` entries were governed by the desktop app's bundled core; this release no longer uses the desktop app.
+- Installed from GitHub. The repository ships the built `lib/`, so no local build step is needed.
 
 The plugin runs under all three DSH interfaces: **Web**, **Desktop**, and **TUI**. Pick the install command that matches the profile you use.
 
 ```sh
-# Web (recommended; ships prebuilt artifacts)
-dsh plugin --profile web add dsh-workbuddy-connect
-dsh web
-
-# or install the Web version from the GitHub source
-dsh plugin --profile web add github:corrinehu/dsh-workbuddy-connect
+# Web (recommended)
+dsh plugin --profile web add github:masknull/dsh-workbuddy-connect
 dsh web
 ```
 
 ```sh
 # Desktop (the DSH Desktop app)
-dsh plugin --profile desktop add dsh-workbuddy-connect
+dsh plugin --profile desktop add github:masknull/dsh-workbuddy-connect
 dsh --profile desktop
 ```
 
 ```sh
 # TUI (terminal UI)
-dsh plugin --profile dsh-tui add dsh-workbuddy-connect
+dsh plugin --profile dsh-tui add github:masknull/dsh-workbuddy-connect
 dsh --profile dsh-tui
 ```
+
+Pin a specific release with a tag, e.g. `github:masknull/dsh-workbuddy-connect#v0.6.0`.
 
 > **TUI users, check the version pairing**: the terminal UI package (`@deepseek-harness-tui/dsh-tui`) must be **`0.10.0-beta.5` or newer** — older versions fail at startup with `events is not iterable` when this plugin is installed. Update the shell first (via its built-in update command or a fresh install), then add this plugin; the newest release is a beta, and a stable one will work the same way.
 
@@ -91,27 +118,48 @@ dsh --profile dsh-tui
 
 > Note: the `dsh-tui` profile requires pnpm 11 to install packages (a different pnpm on PATH fails with `ERR_PNPM_UNEXPECTED_STORE` — use `npx pnpm@11`).
 
-After installing, switch to a WorkBuddy model in the model picker of the interface you chose. On Web and Desktop, the settings card shows the account, token validity, and remaining credit, can refresh the model list manually, and can check eligible models for reasoning levels; the CN and international versions each have their own card. On TUI, configure `authFile` in `/settings` (or `authFileAI` for the international version).
+After installing, switch to a WorkBuddy model in the model picker of the interface you chose. On Web and Desktop, the settings card shows the account, token validity, and remaining credit, can refresh the model list manually, and can check eligible models for reasoning levels. **While signed out** it offers **Sign in** (opens the browser and applies the credential when you finish) and **Choose file…** (import an existing `workbuddy.json`); **while signed in** it offers **Switch account** (discards the current credential and starts a fresh sign-in) and **Sign out**. The CN and international versions each have their own card and sign in independently.
 
 ## CLI
+
+`dsh plugin --profile <web|desktop|dsh-tui> exec dsh-workbuddy-connect login`: sign in through the browser (prints the authorization URL, then stores the credential once you finish). This is the path for environments without the browser card, such as TUI.
+
+`dsh plugin --profile <web|desktop|dsh-tui> exec dsh-workbuddy-connect import --file <path>`: adopt an existing credential file (the `workbuddy.json` format). `--file -` reads standard input, so a document can be piped in.
 
 `dsh plugin --profile <web|desktop|dsh-tui> exec dsh-workbuddy-connect status`: sign-in state and remaining credit (`--json` for machine-readable output; `doctor` for diagnostics and `logout` for credential cleanup are also available).
 
 Both commands target the CN version by default; add `--provider workbuddy-ai` for the international one:
 
 ```sh
+dsh plugin --profile web exec dsh-workbuddy-connect login --provider workbuddy-ai
+dsh plugin --profile web exec dsh-workbuddy-connect import --provider workbuddy-ai --file ./workbuddy-global.json
 dsh plugin --profile web exec dsh-workbuddy-connect status --provider workbuddy-ai
 dsh plugin --profile web exec dsh-workbuddy-connect doctor --provider workbuddy-ai
 ```
 
-`logout` removes only that version's plugin-owned credential copy. It leaves the desktop app's own sign-in alone and does not promise the model group will disappear (the app's credential file still supplies one).
+### Where the credential lives
+
+Scoped per profile, under `$DSH_HOME/profiles/<profile>/.dsh-workbuddy-connect/` (by default `~/.dsh/profiles/web/.dsh-workbuddy-connect/`):
+
+| File | Product |
+|---|---|
+| `.workbuddy-auth.json` | CN |
+| `.workbuddy-ai-auth.json` | International |
+
+**How the profile is determined**: DSH does not expose the active profile name to a plugin, so the plugin looks under `$DSH_HOME/profiles/` for the profile whose `package.json` **declares this plugin**; if several do, it narrows to the one whose installed copy points at this same code. The web, desktop, and TUI profiles therefore each keep their own sign-in. When none can be determined (running from a source checkout, say) it falls back to `$DSH_HOME/.dsh-workbuddy-connect/`; `DSH_WORKBUDDY_DATA_DIR` overrides either way.
+
+Each directory holds the credential `.json` and nothing else — no `.lock` and no leftover temporary file (writes go through a temporary file renamed into place).
+
+`logout` removes only that version's own file and leaves the other alone.
 
 ## Known limitations
 
-- Verified on macOS with the DSH Web / Desktop / TUI profiles (as of 0.3.2 this requires `0.1.5-rc.1`+ and Node 22+; TUI requires the terminal UI package `0.10.0-beta.5` or newer — see the Install section). Windows probes Local and Roaming AppData in order; WSL first reads credentials from the mounted Windows user profile. If the Windows and Linux user names differ and Windows environment variables are not forwarded into WSL, point `WORKBUDDY_AUTH_FILE` (or `WORKBUDDY_AI_AUTH_FILE` for the international version) at the actual file.
+- **Verified on**: Windows with the DSH Web profile. The real sign-in was exercised for both the CN and international products (each returned a working authorization URL and polled correctly), a `workbuddy.json` was imported, both products read their own account and credit independently, and the settings card was compared property-by-property against the built-in card while collapsed, hovered, and expanded. Other platforms were not re-run for this release.
+- Requires DSH `0.1.5-rc.1`+ and Node 22+; TUI requires the terminal UI package `0.10.0-beta.5` or newer (see the Install section). The credential comes from the plugin's own sign-in, so whether the WorkBuddy desktop app is installed — and where it keeps its state — makes no difference.
+- **The international version's login is unreachable on some networks**: `www.workbuddy.ai` cannot be reached from parts of mainland China, so an international sign-in fails there and reports why. The CN version is unaffected.
 - **The international version's model catalog comes from the app's own interface**: the service splits it by User-Agent, which is a private implementation detail that a server-side change can break. When that happens the plugin degrades to this account's last successful catalog and then to its built-in roster, showing the source (live / saved / built-in), the fetch time, and the failure reason on the card — but long-term compatibility is not guaranteed. The CN version's catalog uses the same interface as the official CLI and is unaffected.
-- **International-version environments not yet covered**: on Windows / WSL / Linux no reliable source for the international app's version has been located yet, so the saved value or the built-in default is used. On macOS, real-shim checks covered complete GPT-family replies, tool calls, and continued turns.
-- **Behaviour change with no credentials**: a version whose app was never signed in — and that left no plugin-owned copy — no longer shows a model group. The CN version used to display a built-in fallback list, but every model on it failed when selected.
+- **International catalog User-Agent version**: on Windows / WSL / Linux the international app's version cannot be read, so the saved value or the built-in default is used. This concerns the catalog request only; signing in does not depend on the desktop app.
+- **Behaviour with no credential**: a version nobody has signed in to shows no model group, because every model it could list would fail on use. The group appears as soon as you sign in.
 - **The enterprise credit path currently covers the CN product only**: the international enterprise billing interface is unverified, so those accounts still read through the personal endpoint pending measurement. The enterprise branch could not be tested locally (the development machine holds a personal account); it was implemented from the official app's interface contract, and reports from enterprise users are welcome.
 - Relies on WorkBuddy client interfaces (not a public API); the plugin may need updates as WorkBuddy changes.
 
@@ -124,8 +172,10 @@ dsh plugin --profile web exec dsh-workbuddy-connect doctor --provider workbuddy-
 
 ## Acknowledgements
 
-- [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api) (MIT) — reference implementation of the WorkBuddy upstream protocol.
+- [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api) (MIT) — reference implementation of the WorkBuddy upstream protocol. The 0.6.0 sign-in flow and upstream calls (headers, body rewrites, endpoint selection, error classification) follow this implementation.
+- [zqcccc/workbuddy-cliproxy](https://github.com/zqcccc/workbuddy-cliproxy) — an early reference for the device-authorization sign-in flow.
 - [franksong2702/dsh-codex-connect](https://github.com/franksong2702/dsh-codex-connect) (Apache-2.0) — reference for the DSH plugin structure and provider registration.
+- [corrinehu/dsh-workbuddy-connect](https://github.com/corrinehu/dsh-workbuddy-connect) — the upstream of this repository.
 
 ## License
 

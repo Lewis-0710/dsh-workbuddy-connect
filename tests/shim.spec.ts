@@ -53,14 +53,17 @@ function rawRequest(options: {
 async function startShim(upstreamResponse: () => WorkBuddyChatResult): Promise<Harness> {
   const dir = await mkdtemp(join(tmpdir(), 'wb-shim-'))
   CLEANUP.push(() => rm(dir, { recursive: true, force: true }))
-  const desktop = join(dir, 'workbuddy-desktop.info')
-  await writeFile(desktop, JSON.stringify({
+  // The only credential this plugin accepts is the one its own login wrote, so
+  // the fixture is that file — the nested cross-tool layout, `expiresAt` in
+  // epoch milliseconds, well outside the refresh margin.
+  const own = join(dir, 'own.json')
+  await writeFile(own, JSON.stringify({
+    version: 1,
     auth: { accessToken: 'at', refreshToken: 'rt', expiresAt: Date.now() + 3600_000, domain: 'www.codebuddy.cn' },
     account: { uid: 'uid-1' },
   }))
   const store = new WorkBuddyCredentialStore({
-    desktopPath: desktop,
-    ownPath: join(dir, 'own.json'),
+    ownPath: own,
     refresh: async () => ({ accessToken: 'unused' }),
   })
   const harness: Harness = {

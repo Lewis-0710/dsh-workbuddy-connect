@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import * as WorkBuddy from '../src/index.ts'
+import { CN_VARIANT } from '../src/variants.ts'
 import { fingerprintModel } from '../src/probe-store.ts'
 import type { WorkBuddyModelInfo } from '../src/catalog.ts'
 import type { WorkBuddyProbeRecord } from '../src/probe-store.ts'
@@ -34,7 +35,7 @@ afterEach(async () => {
 /** The account these fixtures sign in as; records must carry the same value. */
 const ACCOUNT = 'uid-1:ent-1'
 
-/** A CN desktop-shaped credential document, so the variant is signed in. */
+/** A CN credential document, written where the plugin's own store reads it. */
 function credentialDocument(): string {
   return JSON.stringify({
     auth: { accessToken: 'at', refreshToken: 'rt', expiresAt: Date.now() + 3_600_000, domain: 'copilot.tencent.com' },
@@ -57,10 +58,10 @@ async function boot(options: {
   const root = await mkdtemp(join(tmpdir(), 'dsh-wb-probe-'))
   CLEANUP.push(root)
   vi.stubEnv('DSH_HOME', root)
-  const cnFile = join(root, 'cn.info')
-  await writeFile(cnFile, credentialDocument())
-  vi.stubEnv('WORKBUDDY_AUTH_FILE', cnFile)
-  vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'absent-ai.info'))
+  // The plugin keeps its files in a per-profile folder; point that at the same
+  // temporary root so the credential below is the one the store reads.
+  vi.stubEnv(WorkBuddy.WORKBUDDY_DATA_DIR_ENV, root)
+  await writeFile(join(root, CN_VARIANT.ownFilename), credentialDocument())
   // Offline: these cases key off the fallback roster, and a real fetch would
   // replace it with whatever the live catalog happens to say today.
   vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline in tests') }))

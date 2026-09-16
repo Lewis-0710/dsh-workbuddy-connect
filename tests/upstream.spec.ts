@@ -15,7 +15,7 @@ const CREDENTIAL: WorkBuddyCredential = {
   expiresAtMs: 0,
   domain: 'www.codebuddy.cn',
   uid: 'uid-1',
-  source: 'desktop',
+  source: 'login',
 }
 
 /** Build the nested upstream billing document that `fetchCredits` unwraps. */

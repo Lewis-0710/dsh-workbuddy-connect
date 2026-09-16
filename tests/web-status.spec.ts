@@ -51,12 +51,12 @@ function requestOnce(options: {
 async function startStatusServer(overrides: Partial<WorkBuddyStatusRouteOptions> = {}): Promise<number> {
   const dir = await mkdtemp(join(tmpdir(), 'wb-status-'))
   CLEANUP.push(() => rm(dir, { recursive: true, force: true }))
-  const desktop = join(dir, 'workbuddy-desktop.info')
-  await writeFile(desktop, nestedDoc(Date.now() + 3600_000))
+  // The plugin's own credential file: the store reads nothing else.
+  const own = join(dir, '.workbuddy-auth.json')
+  await writeFile(own, nestedDoc(Date.now() + 3600_000))
   const deps: WorkBuddyStatusRouteOptions = {
     store: new WorkBuddyCredentialStore({
-      desktopPath: desktop,
-      ownPath: join(dir, 'own.json'),
+      ownPath: own,
       refresh: async credential => ({ accessToken: credential.accessToken }),
     }),
     client: { fetchCredits: async () => ({ total: 0, accounts: [] }) },
@@ -131,6 +131,29 @@ describe('web status route gate', () => {
     const response = await requestOnce({ port, method: 'GET', headers: { host: `127.0.0.1:${String(port)}` } })
     expect(response.status).toBe(200)
     expect(JSON.parse(response.body)).toMatchObject({ status: 'signed-in', nickname: '昵称' })
+  })
+
+  it('carries the sign-in key on the signed-in document too', async () => {
+    // The card gates sign-out and account switching on this key. Sending it only
+    // with the signed-out document left both actions unreachable for a signed-in
+    // user — there was no way out of the card at all.
+    const port = await startStatusServer({ loginKey: 'login-key-1' })
+    const response = await requestOnce({ port, method: 'GET', headers: { host: `127.0.0.1:${String(port)}` } })
+    expect(JSON.parse(response.body)).toMatchObject({ status: 'signed-in', loginKey: 'login-key-1' })
+  })
+
+  it('carries the sign-in key on the signed-out document', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'wb-status-out-'))
+    CLEANUP.push(() => rm(dir, { recursive: true, force: true }))
+    const port = await startStatusServer({
+      loginKey: 'login-key-2',
+      store: new WorkBuddyCredentialStore({
+        ownPath: join(dir, 'absent.json'),
+        refresh: async credential => ({ accessToken: credential.accessToken }),
+      }),
+    })
+    const response = await requestOnce({ port, method: 'GET', headers: { host: `127.0.0.1:${String(port)}` } })
+    expect(JSON.parse(response.body)).toMatchObject({ status: 'signed-out', loginKey: 'login-key-2' })
   })
 
   it('accepts localhost hosts and explicit loopback Origins', async () => {

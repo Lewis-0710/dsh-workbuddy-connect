@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { WorkBuddyCredentialStore } from '../src/auth.ts'
+import { WORKBUDDY_DATA_DIR_ENV, WorkBuddyCredentialStore } from '../src/auth.ts'
 import { WorkBuddyCatalog, FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS } from '../src/catalog.ts'
 import { workBuddyProbeHandler } from '../src/probe-route.ts'
 import { workBuddyStatusHandler } from '../src/web-status.ts'
@@ -119,15 +119,38 @@ async function mount(variant: WorkBuddyVariant, options: {
   return mounted
 }
 
+/**
+ * A temporary Harness home, stubbed as `$DSH_HOME` for the case that asks for it.
+ *
+ * Every credential these cases rely on lives inside such a home: a variant's
+ * store reads exactly one file, `$DSH_HOME/<ownFilename>`, and nothing outside
+ * it — so a case that never writes one is signed out, and none of them can read
+ * a real sign-in from the machine running the tests.
+ */
+async function tempHome(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'wb-routes-'))
+  CLEANUP.push(() => rm(root, { recursive: true, force: true }))
+  vi.stubEnv('DSH_HOME', root)
+  // The plugin keeps its files in a per-profile folder; point that at the same
+  // temporary root so `grantCredential` writes where the store reads.
+  vi.stubEnv(WORKBUDDY_DATA_DIR_ENV, root)
+  return root
+}
+
+/** Serve one variant a signed-in credential it owns. */
+async function grantCredential(variant: WorkBuddyVariant, domain: string): Promise<void> {
+  const root = await tempHome()
+  await writeFile(join(root, variant.ownFilename), credentialDocument(domain))
+}
+
 describe('per-variant route mount', () => {
   it('serves each variant its own identity, credits, and models', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'wb-routes-'))
-    CLEANUP.push(() => rm(root, { recursive: true, force: true }))
-    await writeFile(join(root, 'cn.info'), credentialDocument('copilot.tencent.com'))
-    await writeFile(join(root, 'ai.info'), credentialDocument('www.workbuddy.ai'))
-    vi.stubEnv('DSH_HOME', root)
-    vi.stubEnv('WORKBUDDY_AUTH_FILE', join(root, 'cn.info'))
-    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'ai.info'))
+    // One Harness home holding both variants' own credential files: the CN
+    // variant writes `.workbuddy-auth.json`, the international one
+    // `.workbuddy-ai-auth.json`, and neither may read the other's.
+    const root = await tempHome()
+    await writeFile(join(root, CN_VARIANT.ownFilename), credentialDocument('copilot.tencent.com'))
+    await writeFile(join(root, AI_VARIANT.ownFilename), credentialDocument('www.workbuddy.ai'))
 
     const cnCatalog = new WorkBuddyCatalog(FALLBACK_WORKBUDDY_MODELS)
     const aiCatalog = new WorkBuddyCatalog(FALLBACK_WORKBUDDY_AI_MODELS)
@@ -174,9 +197,6 @@ describe('per-variant route mount', () => {
 
   it('hides every model when the catalog is gated off', async () => {
     const catalog = new WorkBuddyCatalog(FALLBACK_WORKBUDDY_AI_MODELS)
-    const root = await mkdtemp(join(tmpdir(), 'wb-routes-'))
-    CLEANUP.push(() => rm(root, { recursive: true, force: true }))
-    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'absent.info'))
     const server = await mount(AI_VARIANT, { catalog })
     catalog.setVisible(false)
     const signed = JSON.parse((await requestOnce({
@@ -189,6 +209,7 @@ describe('per-variant route mount', () => {
 
   it('keeps the loopback guards on both variants routes', async () => {
     const catalog = new WorkBuddyCatalog(FALLBACK_WORKBUDDY_AI_MODELS)
+    await grantCredential(AI_VARIANT, 'www.workbuddy.ai')
     const server = await mount(AI_VARIANT, { catalog, probeKey: 'key-ai' })
 
     // A DNS-rebinding page addresses the request to its own domain.
@@ -238,12 +259,11 @@ describe('per-variant route mount', () => {
   })
 
   it('never serves a credential belonging to the other product', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'wb-routes-'))
-    CLEANUP.push(() => rm(root, { recursive: true, force: true }))
-    // The CN file is handed to the AI provider.
-    await writeFile(join(root, 'wrong.info'), credentialDocument('copilot.tencent.com'))
-    vi.stubEnv('DSH_HOME', root)
-    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'wrong.info'))
+    // A WorkBuddy (CN) credential sitting in the *international* variant's own
+    // credential file: one file per variant is the whole layout, so this is the
+    // only way the two products' stored credentials can be crossed, and it is
+    // exactly what copying one product's file over the other's produces.
+    await grantCredential(AI_VARIANT, 'copilot.tencent.com')
     const server = await mount(AI_VARIANT, { catalog: new WorkBuddyCatalog(FALLBACK_WORKBUDDY_AI_MODELS) })
     const body = JSON.parse((await requestOnce({
       port: server.port, method: 'GET', path: AI_VARIANT.statusPath,
@@ -251,20 +271,19 @@ describe('per-variant route mount', () => {
     })).body) as Record<string, unknown>
     // Signed out with an explanation rather than signed in as the wrong product.
     expect(body['status']).toBe('signed-out')
-    expect(String(body['reason'])).toMatch(/WORKBUDDY_AI_AUTH_FILE/)
+    // The reason names the file that is wrong and the realm it actually holds:
+    // a test that only matched a generic message would accept a silent sign-out.
+    expect(String(body['reason'])).toContain(AI_VARIANT.ownFilename)
+    expect(String(body['reason'])).toMatch(/WorkBuddy \(CN\)/)
   })
 
   it('reports where the served model list came from', async () => {
     const catalog = new WorkBuddyCatalog(FALLBACK_WORKBUDDY_AI_MODELS)
     // Provenance rides the *signed-in* document, so this case needs a credential
-    // of its own: with no stub the store probes the ambient desktop file and the
-    // answer depends on whether this machine happens to have the WorkBuddy AI
-    // app signed in. The stub is the same one the neighbouring cases use.
-    const root = await mkdtemp(join(tmpdir(), 'wb-routes-'))
-    CLEANUP.push(() => rm(root, { recursive: true, force: true }))
-    await writeFile(join(root, 'ai.info'), credentialDocument('www.workbuddy.ai'))
-    vi.stubEnv('DSH_HOME', root)
-    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'ai.info'))
+    // of its own: the store reads `$DSH_HOME/.workbuddy-ai-auth.json`, and
+    // without one for a temporary home the answer would depend on whether this
+    // machine happened to be signed in already.
+    await grantCredential(AI_VARIANT, 'www.workbuddy.ai')
     const server = await mount(AI_VARIANT, { catalog })
     const body = JSON.parse((await requestOnce({
       port: server.port, method: 'GET', path: AI_VARIANT.statusPath,

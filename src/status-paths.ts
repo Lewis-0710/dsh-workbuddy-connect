@@ -25,6 +25,60 @@ export const WORKBUDDY_PROBE_PATH = '/plugins/dsh-workbuddy-connect/probe'
 export const WORKBUDDY_AI_STATUS_PATH = '/plugins/dsh-workbuddy-connect/ai/status'
 export const WORKBUDDY_AI_PROBE_PATH = '/plugins/dsh-workbuddy-connect/ai/probe'
 
+/**
+ * Plugin-owned sign-in endpoints, one per variant.
+ *
+ * Each variant signs in against its own realm, so each needs its own route: the
+ * realm is chosen by which provider the user is looking at, never by a value the
+ * browser sends. A POST here starts an attempt (or polls one, or signs out);
+ * see {@link WorkBuddyWebLoginRequest}.
+ */
+export const WORKBUDDY_LOGIN_PATH = '/plugins/dsh-workbuddy-connect/login'
+export const WORKBUDDY_AI_LOGIN_PATH = '/plugins/dsh-workbuddy-connect/ai/login'
+
+/**
+ * One action the sign-in route accepts.
+ *
+ * `begin` returns the URL the human must open; `poll` reports whether that visit
+ * has finished; `logout` removes the stored credential; `import` adopts a
+ * credential document the user already has (a `workbuddy.json` from the sibling
+ * tooling, or one exported from another machine). All four are writes — `begin`
+ * holds a pending attempt, `import` and `poll` commit a credential — which is why
+ * they share this route's in-process key rather than the read-only status GET.
+ */
+export type WorkBuddyWebLoginAction = 'begin' | 'poll' | 'logout' | 'import'
+
+/** Request body accepted by the sign-in route. */
+export interface WorkBuddyWebLoginRequest {
+  action: WorkBuddyWebLoginAction
+  /** The attempt to poll; required for `poll` and ignored otherwise. */
+  state?: string
+  /**
+   * The credential document to adopt; required for `import`.
+   *
+   * Travels as text rather than as a path because the browser has no filesystem:
+   * the card reads the file the user picked and posts its contents. The host
+   * parses and validates it before anything is written.
+   */
+  document?: string
+}
+
+/**
+ * Progress of one sign-in attempt, as the card renders it.
+ *
+ * `pending` carries the URL to open so a card that lost the `begin` response
+ * (a re-render, a second tab) can still show where to go. `imported` reports a
+ * document that was adopted, with the account it belongs to. `failed` is a
+ * diagnosis, not an error page: the upstream or the network refused, and the
+ * message says which.
+ */
+export type WorkBuddyWebLoginResult =
+  | { status: 'pending'; state: string; url?: string }
+  | { status: 'complete'; nickname?: string }
+  | { status: 'imported'; uid?: string; nickname?: string }
+  | { status: 'signed-out' }
+  | { status: 'failed'; message: string }
+
 /** One model's recorded probe observation, as the card displays it. */
 export interface WorkBuddyWebProbeModel {
   id: string
@@ -155,19 +209,11 @@ export interface WorkBuddyWebModelBadge {
 /** The JSON document the plugin card renders. */
 export type WorkBuddyWebStatus =
   | {
-    status: 'signed-out'
-    /**
-     * Why no credential is usable, when that is diagnosable rather than simply
-     * "nobody signed in" — today a credential belonging to the other product.
-     * The card renders it in place of the generic sign-in hint.
-     */
-    reason?: string
-  }
-  | {
     status: 'signed-in'
     nickname?: string
     domain?: string
-    source?: 'desktop' | 'dsh'
+    /** Which realm the stored credential belongs to. */
+    region?: 'cn' | 'global'
     expiresAt?: number
     credits?: WorkBuddyWebCredits
     creditsError?: string
@@ -185,5 +231,32 @@ export type WorkBuddyWebStatus =
      * loopback guard); it is never persisted and rotates per process.
      */
     probeKey?: string
+    /**
+     * In-process key authorizing sign-in writes, including signing out. Travels
+     * with the document for the same reason `probeKey` does.
+     */
+    loginKey?: string
+  }
+  | {
+    /**
+     * Nobody is signed in, and the card may sign in.
+     *
+     * Its own arm rather than an optional field on the signed-in document,
+     * because the sign-in key below is exactly what a signed-out card needs and
+     * a signed-in one does not: the two states ask for different actions, and a
+     * single arm would let a card offer sign-out and sign-in at once.
+     */
+    status: 'signed-out'
+    /**
+     * Why no credential is usable, when that is diagnosable rather than simply
+     * "nobody signed in" — today a credential belonging to the other product.
+     * The card renders it in place of the generic sign-in hint.
+     */
+    reason?: string
+    /**
+     * In-process key authorizing sign-in writes; see the signed-in arm's
+     * `probeKey` for why it travels with the document.
+     */
+    loginKey?: string
   }
   | { status: 'error'; message: string }

@@ -7,6 +7,7 @@
  * @module dsh-workbuddy-connect/upstream
  */
 
+import { createHash } from 'node:crypto'
 import { appUserAgent, resolveAppVersion, type AppVersionInfo } from './app-version.ts'
 import { chatUserAgent, fallbackChatIdentity, resolveChatIdentity, type ChatIdentity } from './client-identity.ts'
 import type { WorkBuddyCredential } from './auth.ts'
@@ -145,6 +146,27 @@ const CN_BILLING_BASE = 'https://www.codebuddy.cn'
 const GLOBAL_BASE = 'https://www.workbuddy.ai'
 
 /**
+ * The domain the international gateway expects in `X-Domain`.
+ *
+ * A fixed value rather than the signed-in account's own domain: the
+ * international client declares it is talking to `www.workbuddy.ai` whichever
+ * host issued its session, and the gateway rejects the request as illegal when
+ * the declared domain disagrees.
+ */
+const GLOBAL_DOMAIN = 'www.workbuddy.ai'
+
+/** The chat path both realms serve. */
+const CHAT_PATH = '/v2/chat/completions'
+
+/**
+ * The international gateway's first-choice chat path.
+ *
+ * Tried before {@link CHAT_PATH} and abandoned on 404/405: the two deployments
+ * route chat differently, so a single hard-coded path fails one of them.
+ */
+const GLOBAL_CONSOLE_CHAT_PATH = '/console/chat/completions'
+
+/**
  * Display name for the single synthetic row the enterprise endpoint produces.
  *
  * The endpoint reports one cycle quota, not the personal endpoint's list of
@@ -177,6 +199,12 @@ function describeShape(document: unknown): string {
 
 /** Shared CLI-form User-Agent for refresh and the CN catalog; chat and probe present the desktop identity (client-identity.ts). */
 const CLIENT_UA = 'CLI/2.63.2 CodeBuddy/2.63.2'
+
+/** Client version carried by the attribution and billing headers. */
+const CLIENT_VERSION = '2.63.2'
+
+/** Client name the upstream attributes usage to; the desktop product, not a gateway. */
+const WORKBUDDY_CLIENT_NAME = 'WorkBuddy'
 const JSON_TIMEOUT_MS = 30_000
 const ERROR_BODY_LIMIT = 4096
 
@@ -186,6 +214,18 @@ const HARD_CREDIT_MARKERS: readonly string[] = [
   'quota exceeded', 'quota exhaust', 'payment required', 'credit not enough',
   'not enough credit',
   '积分不足', '额度不足', '余额不足', '积分用完', '额度用尽', '没有积分',
+]
+
+/**
+ * Rate-limit markers that arrive without a 429 status.
+ *
+ * The upstream reports throttling in the body on 200/400/403 as well, so a
+ * status-only test misses it and the account is neither cooled down nor moved
+ * aside — it simply keeps failing.
+ */
+const SOFT_RATE_MARKERS: readonly string[] = [
+  'rate limit', 'rate-limiting', 'rate-limited', 'too many requests', 'too many',
+  'usage limit', '请求过于频繁', '限流',
 ]
 
 /** The concrete effort spellings WorkBuddy exposes on the wire. */
@@ -286,17 +326,34 @@ function resolveUpstreamBilling(wrapped: Record<string, unknown>): { billing: Wo
 /** Session-invalidation markers that mean "sign in again in the WorkBuddy app". */
 const SESSION_DEAD_MARKERS: readonly string[] = ['Offline user session not found', '12153']
 
-/** Classify an upstream failure from its HTTP status and body excerpt. */
+/**
+ * Classify an upstream failure from its HTTP status and body excerpt.
+ *
+ * Order is load-bearing:
+ *
+ * - A hard credit refusal (402, or an exhausted-balance phrase) is terminal for
+ *   the account, so it is checked first.
+ * - Session death follows, because its marker appears in bodies that also carry
+ *   other numbers.
+ * - **429 comes before the credit phrase list.** A throttling body often also
+ *   says "quota exceeded"; reading that as an exhausted balance parks a healthy
+ *   account until the next billing day instead of retrying shortly. Testing the
+ *   status first is what keeps the two apart.
+ * - The phrase lists then catch what the status alone does not report.
+ */
 export function classifyUpstreamError(status: number, body: string): UpstreamErrorKind {
-  if (status === 402) return 'hard_credit'
   const lower = body.toLowerCase()
-  for (const marker of HARD_CREDIT_MARKERS) {
-    if (lower.includes(marker.toLowerCase()) || body.includes(marker)) return 'hard_credit'
-  }
+  if (status === 402) return 'hard_credit'
   for (const marker of SESSION_DEAD_MARKERS) {
     if (body.includes(marker)) return 'session_dead'
   }
   if (status === 429) return 'soft_rate'
+  for (const marker of HARD_CREDIT_MARKERS) {
+    if (lower.includes(marker.toLowerCase()) || body.includes(marker)) return 'hard_credit'
+  }
+  for (const marker of SOFT_RATE_MARKERS) {
+    if (lower.includes(marker.toLowerCase()) || body.includes(marker)) return 'soft_rate'
+  }
   if (status === 404) return 'not_found'
   if (status >= 500) return 'server'
   if (status >= 400) return 'client'
@@ -310,26 +367,74 @@ export function regionOf(domain: string): WorkBuddyRegion {
   return 'cn'
 }
 
+/**
+ * The realm a credential belongs to.
+ *
+ * An explicit realm wins when it names the international deployment, matching
+ * the rule the sibling tooling applies: a credential that declares `global` is
+ * routed there even if its domain would say otherwise, while a domain naming
+ * `workbuddy.ai` is international whatever the explicit realm says. Anything
+ * else is CN, which keeps a credential that states nothing behaving exactly as
+ * it did before the field existed.
+ */
+export function realmOf(credential: Pick<WorkBuddyCredential, 'domain' | 'region'>): WorkBuddyRegion {
+  if (credential.region === 'global') return 'global'
+  return regionOf(credential.domain)
+}
+
 function chatBase(credential: WorkBuddyCredential): string {
-  return regionOf(credential.domain) === 'global' ? GLOBAL_BASE : CN_CHAT_BASE
+  return realmOf(credential) === 'global' ? GLOBAL_BASE : CN_CHAT_BASE
 }
 
 function billingBase(credential: WorkBuddyCredential): string {
-  return regionOf(credential.domain) === 'global' ? GLOBAL_BASE : CN_BILLING_BASE
+  return realmOf(credential) === 'global' ? GLOBAL_BASE : CN_BILLING_BASE
 }
 
 function originReferer(credential: WorkBuddyCredential): string {
-  return regionOf(credential.domain) === 'global' ? GLOBAL_BASE : CN_BILLING_BASE
+  return realmOf(credential) === 'global' ? GLOBAL_BASE : CN_BILLING_BASE
+}
+
+/**
+ * Per-account device identifiers, derived from the uid.
+ *
+ * Stable across restarts and distinct per account, which is what the upstream
+ * treats a device fingerprint as: a missing or drifting one lets it associate
+ * several accounts as a single client. A credential with no uid carries none,
+ * since an anonymous request has no device to name.
+ */
+function accountStableHeaders(credential: WorkBuddyCredential): Record<string, string> {
+  if (credential.uid === '') return {}
+  return {
+    'X-Machine-ID': deriveAccountStableId(credential.uid, 'machine'),
+    'X-Session-ID': deriveAccountStableId(credential.uid, 'session'),
+  }
+}
+
+/** One stable 36-hex identifier for an account and purpose. */
+function deriveAccountStableId(uid: string, purpose: string): string {
+  return createHash('sha256').update(`wb2a:${purpose}:${uid}`).digest('hex').slice(0, 36)
+}
+
+/** The locale the upstream expects for a realm's requests. */
+function acceptLanguageFor(credential: WorkBuddyCredential): string {
+  return realmOf(credential) === 'global' ? 'en-US' : 'zh-CN'
 }
 
 /** Headers every upstream request shares. */
 function commonHeaders(credential: WorkBuddyCredential): Record<string, string> {
   return {
-    'Accept': 'application/json, text/plain, */*',
+    'Content-Type': 'application/json',
+    // Non-streaming default; chat overrides this with the event-stream type.
+    'Accept': 'application/json',
     'X-Requested-With': 'XMLHttpRequest',
     'Origin': originReferer(credential),
     'Referer': `${originReferer(credential)}/`,
     'User-Agent': CLIENT_UA,
+    // The gateway reads this as the official client's gate header, and every API
+    // request is expected to carry it.
+    'X-CodeBuddy-Request': '1',
+    'Accept-Language': acceptLanguageFor(credential),
+    ...accountStableHeaders(credential),
   }
 }
 
@@ -341,27 +446,53 @@ function commonHeaders(credential: WorkBuddyCredential): Record<string, string> 
  * but never this override, so the two paths cannot drift into each other.
  */
 function chatHeaders(credential: WorkBuddyCredential, userAgent?: string): Record<string, string> {
+  const international = realmOf(credential) === 'global'
   const headers: Record<string, string> = {
     ...commonHeaders(credential),
     ...userAgent === undefined ? {} : { 'User-Agent': userAgent },
-    'Content-Type': 'application/json',
+    // Chat streams, so it declares the event-stream type the shared
+    // non-streaming default does not.
+    'Accept': 'application/json, text/event-stream',
+    ...credential.accessToken === ''
+      ? { 'X-No-Authorization': '1' }
+      : { 'Authorization': `Bearer ${credential.accessToken}` },
     // 安全红线：chat 请求绝不携带 refresh token。
     ...credential.uid === '' ? { 'X-No-User-Id': '1' } : { 'X-User-Id': credential.uid },
-    ...credential.enterpriseId === undefined || credential.enterpriseId === ''
-      ? { 'X-No-Enterprise-Id': '1' }
-      : { 'X-Enterprise-Id': credential.enterpriseId },
-    ...credential.domain === '' ? { 'X-No-Department-Info': '1' } : { 'X-Domain': credential.domain },
-    'X-Product': 'SaaS',
+    ...international
+      // The international gateway is told, unconditionally, that this is a
+      // personal international client: no enterprise, and the international
+      // domain rather than whichever host issued the login. Declaring the
+      // account's own enterprise id or login domain here is refused as an
+      // illegal request.
+      ? { 'X-No-Enterprise-Id': '1', 'X-Domain': GLOBAL_DOMAIN }
+      : {
+          ...credential.enterpriseId === undefined || credential.enterpriseId === ''
+            ? { 'X-No-Enterprise-Id': '1' }
+            : { 'X-Enterprise-Id': credential.enterpriseId },
+          ...credential.domain === '' ? { 'X-No-Department-Info': '1' } : { 'X-Domain': credential.domain },
+        },
+    // Usage attribution: the upstream reports usage per client, and a request
+    // carrying no client identity is recorded as an anonymous gateway call.
+    'X-Agent-Purpose': 'conversation',
+    'X-IDE-Name': WORKBUDDY_CLIENT_NAME,
+    'X-IDE-Type': WORKBUDDY_CLIENT_NAME,
+    'X-IDE-Version': CLIENT_VERSION,
+    'X-Product': WORKBUDDY_CLIENT_NAME,
   }
   return headers
 }
 
-/** Refresh-endpoint headers; X-Refresh-Token appears here and nowhere else. */
+/**
+ * Refresh-endpoint headers; X-Refresh-Token appears here and nowhere else.
+ *
+ * `X-Auth-Refresh-Source` names the channel the refresh came through. The value
+ * is `plugin`, matching the official client's own refresh channel.
+ */
 function refreshHeaders(credential: WorkBuddyCredential): Record<string, string> {
   const headers: Record<string, string> = {
     ...commonHeaders(credential),
     'X-Refresh-Token': credential.refreshToken,
-    'X-Auth-Refresh-Source': 'workbuddy',
+    'X-Auth-Refresh-Source': 'plugin',
   }
   if (credential.enterpriseId !== undefined && credential.enterpriseId !== '') {
     headers['X-Enterprise-Id'] = credential.enterpriseId
@@ -369,12 +500,23 @@ function refreshHeaders(credential: WorkBuddyCredential): Record<string, string>
   return headers
 }
 
-/** Billing request headers. */
+/**
+ * Billing request headers.
+ *
+ * This path does not go through {@link commonHeaders}, so the gate header, the
+ * locale, the identity, and the account device ids are applied here as well — a
+ * billing call that looks like an unidentified client is the anomaly the
+ * upstream's own client never produces.
+ */
 function billingHeaders(credential: WorkBuddyCredential): Record<string, string> {
   const headers: Record<string, string> = {
     'Authorization': `Bearer ${credential.accessToken}`,
     'Accept': 'application/json',
     'Content-Type': 'application/json',
+    'X-CodeBuddy-Request': '1',
+    'Accept-Language': acceptLanguageFor(credential),
+    'User-Agent': CLIENT_UA,
+    ...accountStableHeaders(credential),
   }
   if (credential.uid !== '') headers['X-User-Id'] = credential.uid
   if (credential.enterpriseId !== undefined && credential.enterpriseId !== '') {
@@ -386,10 +528,11 @@ function billingHeaders(credential: WorkBuddyCredential): Record<string, string>
 }
 
 /**
- * Normalize an OpenAI chat-completions body for the WorkBuddy upstream:
- * force `stream: true` (the upstream rejects non-streaming), flatten
- * `tool_choice` (the upstream's field is a string; object forms return 400),
- * and rewrite `developer` messages as `system`.
+ * Normalize an OpenAI chat-completions body for the WorkBuddy upstream: force
+ * `stream: true` (the upstream rejects non-streaming), translate the
+ * `max_completion_tokens` alias, default `stream_options`, flatten `tool_choice`
+ * (the upstream's field is a string; object forms return 400), and rewrite
+ * `developer` messages as `system`.
  *
  * The `developer` rewrite is load-bearing: pi-ai emits the system prompt as
  * `role: "developer"` (the OpenAI convention it adopted), but the WorkBuddy
@@ -407,9 +550,34 @@ export function prepareChatBody(source: string): string {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) return source
   const obj = body as Record<string, unknown>
   obj['stream'] = true
+  translateMaxCompletionTokens(obj)
+  // The official client always asks for usage on a streaming call, and the
+  // upstream only reports it in the final frame when asked. An explicit
+  // `stream_options` is left exactly as the caller wrote it.
+  if (!('stream_options' in obj)) obj['stream_options'] = { include_usage: true }
   normalizeDeveloperRole(obj)
   normalizeToolChoice(obj)
   return JSON.stringify(obj)
+}
+
+/**
+ * Translate the `max_completion_tokens` alias into the `max_tokens` field the
+ * upstream actually reads.
+ *
+ * OpenAI deprecated `max_tokens` in favour of the alias, so a newer client sends
+ * only the alias; the upstream ignores it and falls back to its own default
+ * output cap, which truncates long answers. An explicit `max_tokens` wins and
+ * the alias is then dropped rather than translated, and a value that is not a
+ * positive integer is dropped without translating — `0` and `null` mean "not
+ * set", and a negative or non-numeric value is malformed input that must not be
+ * laundered into a valid one.
+ */
+function translateMaxCompletionTokens(obj: Record<string, unknown>): void {
+  const present = 'max_completion_tokens' in obj
+  const alias = obj['max_completion_tokens']
+  delete obj['max_completion_tokens']
+  if (!present || 'max_tokens' in obj) return
+  if (typeof alias === 'number' && Number.isInteger(alias) && alias > 0) obj['max_tokens'] = alias
 }
 
 /** Rewrite `role: "developer"` messages to `role: "system"` (upstream rejects developer). */
@@ -559,7 +727,7 @@ export class WorkBuddyUpstreamClient {
     bodyJson: string,
     signal?: AbortSignal,
   ): Promise<WorkBuddyChatResult> {
-    const region = regionOf(credential.domain)
+    const region = realmOf(credential)
     // Identity resolution must never block a message: any failure — a thrown
     // resolver included — degrades to the desktop fallback form (built-in
     // version, no CLI segment), never to the legacy CLI UA.
@@ -569,24 +737,45 @@ export class WorkBuddyUpstreamClient {
     } catch {
       userAgent = chatUserAgent(fallbackChatIdentity(region), region)
     }
-    let response: Response
+    // Cache key: the upstream reuses a prefix cache per key, so a stable
+    // account-scoped key turns a repeated conversation prefix into a cache hit.
+    const body = withPromptCacheKey(
+      region === 'global' ? prepareInternationalChatBody(bodyJson) : bodyJson,
+      credential.uid,
+    )
+    let response: Response | undefined
+    let lastFailure: { status: number; text: string } | undefined
     try {
-      response = await fetch(`${chatBase(credential)}/v2/chat/completions`, {
-        method: 'POST',
-        headers: { ...chatHeaders(credential, userAgent), 'Authorization': `Bearer ${credential.accessToken}` },
-        body: region === 'global' ? prepareInternationalChatBody(bodyJson) : bodyJson,
-        ...signal === undefined ? {} : { signal },
-      })
+      // The international realm routes chat through a console path first and
+      // answers 404/405 on the shared one; the CN realm serves only the shared
+      // path. Trying in order, and falling through only on a routing miss, keeps
+      // one code path correct for both.
+      for (const path of chatPaths(region)) {
+        const attempt = await fetch(`${chatBase(credential)}${path}`, {
+          method: 'POST',
+          headers: chatHeaders(credential, userAgent),
+          body,
+          ...signal === undefined ? {} : { signal },
+        })
+        if (attempt.ok) {
+          response = attempt
+          break
+        }
+        // A body can only be read once; capture it here so the failure still has
+        // its reason after a fallback attempt.
+        lastFailure = { status: attempt.status, text: (await attempt.text()).slice(0, ERROR_BODY_LIMIT) }
+        if (!pathFallbackStatus(attempt.status)) break
+      }
     } catch (error: unknown) {
       return { ok: false, status: 0, kind: 'server', message: `transport error: ${String(error)}` }
     }
-    if (response.ok) return { ok: true, response }
-    const text = (await response.text()).slice(0, ERROR_BODY_LIMIT)
+    if (response !== undefined) return { ok: true, response }
+    const failure = lastFailure ?? { status: 0, text: 'no chat endpoint answered' }
     return {
       ok: false,
-      status: response.status,
-      kind: classifyUpstreamError(response.status, text),
-      message: text,
+      status: failure.status,
+      kind: classifyUpstreamError(failure.status, failure.text),
+      message: failure.text,
     }
   }
 
@@ -628,7 +817,7 @@ export class WorkBuddyUpstreamClient {
    * such rather than as a generic catalog failure.
    */
   async fetchModels(credential: WorkBuddyCredential, signal?: AbortSignal): Promise<readonly WorkBuddyUpstreamModel[]> {
-    const international = regionOf(credential.domain) === 'global'
+    const international = realmOf(credential) === 'global'
     // `this.resolveAppVersion`, not the module-level function: the constructor
     // injects a resolver so tests never read the real filesystem, and calling
     // the module function directly made that seam inert.
@@ -685,7 +874,7 @@ export class WorkBuddyUpstreamClient {
    * moved onto an unmeasured one.
    */
   async fetchCredits(credential: WorkBuddyCredential): Promise<WorkBuddyCredits> {
-    if (regionOf(credential.domain) === 'cn'
+    if (realmOf(credential) === 'cn'
       && credential.enterpriseId !== undefined && credential.enterpriseId !== '') {
       return await this.fetchEnterpriseCredits(credential)
     }
@@ -699,19 +888,33 @@ export class WorkBuddyUpstreamClient {
       date.getMinutes().toString().padStart(2, '0'),
       date.getSeconds().toString().padStart(2, '0'),
     ].join(':')
-    const response = await fetch(`${billingBase(credential)}/v2/billing/meter/get-user-resource`, {
-      method: 'POST',
-      headers: billingHeaders(credential),
-      body: JSON.stringify({
-        PageNumber: 1,
-        PageSize: 100,
-        ProductCode: 'p_tcaca',
-        Status: [0, 3],
-        PackageEndTimeRangeBegin: format(now),
-        PackageEndTimeRangeEnd: format(new Date(now.getTime() + 365 * 101 * 24 * 3600 * 1000)),
-      }),
-      signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
+    const body = JSON.stringify({
+      PageNumber: 1,
+      PageSize: 100,
+      ProductCode: 'p_tcaca',
+      Status: [0, 3],
+      PackageEndTimeRangeBegin: format(now),
+      PackageEndTimeRangeEnd: format(new Date(now.getTime() + 365 * 101 * 24 * 3600 * 1000)),
     })
+    // The international deployment serves the meter under a path without the
+    // `/v2` prefix and 404s on the shared one, so the candidates are tried in
+    // order and only a routing miss falls through — the same treatment chat gets.
+    let response: Response | undefined
+    let lastStatus = 0
+    for (const path of billingMeterPaths(realmOf(credential))) {
+      const attempt = await fetch(`${billingBase(credential)}${path}`, {
+        method: 'POST',
+        headers: billingHeaders(credential),
+        body,
+        signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
+      })
+      lastStatus = attempt.status
+      if (attempt.ok || !pathFallbackStatus(attempt.status)) {
+        response = attempt
+        break
+      }
+    }
+    if (response === undefined) throw new Error(`workbuddy billing endpoint unavailable (http ${lastStatus})`)
     const envelope = await readEnvelope(response)
     if (!response.ok || envelope.code !== 0) throw envelopeError(response.status, envelope)
     const responseWrapper = typeof envelope.data === 'object' && envelope.data !== null
@@ -861,7 +1064,7 @@ export class WorkBuddyUpstreamClient {
     effort: string | undefined,
     signal: AbortSignal,
   ): Promise<ProbeAttempt> {
-    const international = regionOf(credential.domain) === 'global'
+    const international = realmOf(credential) === 'global'
     // Same identity rule as the chat path — chat and its probe sibling must
     // never present two different clients, and a thrown resolver degrades to
     // the desktop fallback form exactly as in `chatStream`.
@@ -904,6 +1107,78 @@ export class WorkBuddyUpstreamClient {
     const streamed = await readFirstEvent(response)
     return { status: response.status, streamed }
   }
+}
+
+/**
+ * The chat paths to try, in order, for a realm.
+ *
+ * The international deployment answers chat on the console path and the CN
+ * deployment on the shared v2 path; the international list keeps the shared one
+ * as a fallback, so a deployment that changes its routing still resolves.
+ */
+function chatPaths(region: WorkBuddyRegion): readonly string[] {
+  return region === 'global' ? [GLOBAL_CONSOLE_CHAT_PATH, CHAT_PATH] : [CHAT_PATH]
+}
+
+/** Whether a failed request should be retried on the next candidate path. */
+function pathFallbackStatus(status: number): boolean {
+  return status === 404 || status === 405
+}
+
+/**
+ * The personal billing paths to try, in order, for a realm.
+ *
+ * The international deployment serves the meter without the `/v2` prefix; the CN
+ * deployment serves it with one. Each realm tries its own spelling first and
+ * falls back to the other on a routing miss.
+ */
+function billingMeterPaths(region: WorkBuddyRegion): readonly string[] {
+  const withVersion = '/v2/billing/meter/get-user-resource'
+  const withoutVersion = '/billing/meter/get-user-resource'
+  return region === 'global' ? [withoutVersion, withVersion] : [withVersion]
+}
+
+/**
+ * Add a `prompt_cache_key` to an outbound chat body.
+ *
+ * The key is derived from the account's uid and its conversation, so the same
+ * conversation on the same account reuses the upstream's prefix cache while two
+ * accounts can never collide on one key — a collision would let one account hit
+ * a cached prefix belonging to another. A body that already carries a key is
+ * left alone: the caller knows better which prefix it means to reuse.
+ *
+ * A body that is not a JSON object is returned unchanged, matching
+ * {@link prepareChatBody}: a malformed body is the upstream's to reject, not
+ * this function's to rewrite.
+ */
+export function withPromptCacheKey(source: string, uid: string): string {
+  let body: unknown
+  try {
+    body = JSON.parse(source)
+  } catch {
+    return source
+  }
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return source
+  const obj = body as Record<string, unknown>
+  const existing = obj['prompt_cache_key']
+  if (typeof existing === 'string' && existing !== '') return source
+  const conversation = typeof obj['conversation_id'] === 'string' && obj['conversation_id'] !== ''
+    ? obj['conversation_id']
+    : typeof obj['conversationId'] === 'string' && obj['conversationId'] !== ''
+      ? obj['conversationId']
+      : ''
+  obj['prompt_cache_key'] = buildPromptCacheKey(uid, conversation)
+  return JSON.stringify(obj)
+}
+
+/** The stable `wb2a-<uid8>-<conversationHash>` cache key for one account. */
+function buildPromptCacheKey(uid: string, conversation: string): string {
+  const accountSegment = uid === '' ? '-' : uid.slice(0, 8)
+  const conversationHash = createHash('sha256')
+    .update(`${uid}|${conversation}`)
+    .digest('hex')
+    .slice(0, 32)
+  return `wb2a-${accountSegment}-${conversationHash}`
 }
 
 /** Pull `extError.code` out of an upstream error body, if it is shaped that way. */

@@ -2,16 +2,16 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { WorkBuddyCredentialStore, desktopAuthCandidatesFor, parseWorkBuddyAuth } from '../src/auth.ts'
+import { WORKBUDDY_DATA_DIR_ENV, WorkBuddyCredentialStore, parseWorkBuddyAuth } from '../src/auth.ts'
 import { FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS, WorkBuddyCatalog } from '../src/catalog.ts'
 import { AI_VARIANT, CN_VARIANT, variantFor, WORKBUDDY_VARIANTS } from '../src/variants.ts'
 import { modelWithCurrentPromotion, parseModelCatalog, prepareInternationalChatBody, WorkBuddyUpstreamClient } from '../src/upstream.ts'
 
 /**
- * The two-variant contract. Both products share one auth directory and repeat
- * several model ids, so these tests cover the three ways that can go wrong:
- * a credential crossing products, one variant's models answering for the other,
- * and a promotion outliving its window.
+ * The two-variant contract. Both products repeat several model ids and each
+ * keeps its own credential file, so these tests cover the three ways that can
+ * go wrong: a credential crossing products, one variant's models answering for
+ * the other, and a promotion outliving its window.
  */
 
 const CLEANUP: (() => Promise<void>)[] = []
@@ -27,7 +27,7 @@ async function tempDir(): Promise<string> {
   return root
 }
 
-/** A desktop-shaped credential document for one region. */
+/** A credential document for one region, in the plugin's stored layout. */
 function credentialDocument(domain: string, accessToken = 'at'): string {
   return JSON.stringify({
     auth: { accessToken, refreshToken: 'rt', expiresAt: Date.now() + 3_600_000, domain },
@@ -35,11 +35,15 @@ function credentialDocument(domain: string, accessToken = 'at'): string {
   })
 }
 
-function storeFor(variant: typeof CN_VARIANT, desktopPath: string, ownPath: string): WorkBuddyCredentialStore {
+/** Every variant's own credential path under a temp root, named as the variant says. */
+function ownPathIn(root: string, variant: typeof CN_VARIANT): string {
+  return join(root, variant.ownFilename)
+}
+
+function storeFor(root: string, variant: typeof CN_VARIANT): WorkBuddyCredentialStore {
   return new WorkBuddyCredentialStore({
     variant,
-    desktopPath,
-    ownPath,
+    ownPath: ownPathIn(root, variant),
     refresh: async credential => ({ accessToken: credential.accessToken }),
   })
 }
@@ -49,44 +53,30 @@ describe('variant descriptors', () => {
     // Existing installs, settings files, and status paths must not move.
     expect(CN_VARIANT.id).toBe('workbuddy')
     expect(CN_VARIANT.displayName).toBe('WorkBuddy')
-    expect(CN_VARIANT.env).toBe('WORKBUDDY_AUTH_FILE')
-    expect(CN_VARIANT.desktopFilename).toBe('workbuddy-desktop.info')
     expect(CN_VARIANT.ownFilename).toBe('.workbuddy-auth.json')
     expect(CN_VARIANT.probeFilename).toBe('.workbuddy-probe.json')
     expect(CN_VARIANT.statusPath).toBe('/plugins/dsh-workbuddy-connect/status')
     expect(CN_VARIANT.probePath).toBe('/plugins/dsh-workbuddy-connect/probe')
+    expect(CN_VARIANT.loginPath).toBe('/plugins/dsh-workbuddy-connect/login')
   })
 
-  it('gives the AI variant its own files, routes, and env var', () => {
+  it('gives the AI variant its own files, routes, and sign-in path', () => {
     expect(AI_VARIANT.id).toBe('workbuddy-ai')
     expect(AI_VARIANT.displayName).toBe('WorkBuddy AI')
     expect(AI_VARIANT.region).toBe('global')
-    expect(AI_VARIANT.env).toBe('WORKBUDDY_AI_AUTH_FILE')
-    expect(AI_VARIANT.desktopFilename).toBe('workbuddy-desktop-ai.info')
     expect(AI_VARIANT.ownFilename).toBe('.workbuddy-ai-auth.json')
     expect(AI_VARIANT.probeFilename).toBe('.workbuddy-ai-probe.json')
     expect(AI_VARIANT.statusPath).toBe('/plugins/dsh-workbuddy-connect/ai/status')
     expect(AI_VARIANT.probePath).toBe('/plugins/dsh-workbuddy-connect/ai/probe')
+    expect(AI_VARIANT.loginPath).toBe('/plugins/dsh-workbuddy-connect/ai/login')
   })
 
-  it('shares no file, route, or env var between the two', () => {
-    // A shared probe file would let one endpoint's observation answer for the
-    // same-named model on the other; a shared route would cross the cards.
-    for (const field of ['desktopFilename', 'ownFilename', 'probeFilename', 'statusPath', 'probePath', 'env', 'id'] as const) {
+  it('shares no file, route, or login path between the two', () => {
+    // A shared credential or probe file would let one product's state answer
+    // for the other; a shared route would cross the cards.
+    for (const field of ['id', 'appName', 'region', 'ownFilename', 'probeFilename', 'catalogFilename', 'statusPath', 'probePath', 'loginPath'] as const) {
       const values = WORKBUDDY_VARIANTS.map(variant => variant[field])
       expect(new Set(values).size, `${field} must differ between variants`).toBe(values.length)
-    }
-  })
-
-  it('reuses the platform probe order when swapping the basename', () => {
-    // Both apps write into the same shared CodeBuddyExtension directory, so only
-    // the filename may differ — the per-platform ordering must survive intact.
-    const cn = desktopAuthCandidatesFor(CN_VARIANT)
-    const ai = desktopAuthCandidatesFor(AI_VARIANT)
-    expect(ai).toHaveLength(cn.length)
-    for (const [index, path] of ai.entries()) {
-      expect(path.endsWith('workbuddy-desktop-ai.info')).toBe(true)
-      expect(cn[index]!.replace(/workbuddy-desktop\.info$/, 'workbuddy-desktop-ai.info')).toBe(path)
     }
   })
 
@@ -101,108 +91,101 @@ describe('variant descriptors', () => {
 describe('credential region separation', () => {
   it('refuses a CN credential offered to the international provider', async () => {
     const root = await tempDir()
-    const desktop = join(root, 'workbuddy-desktop-ai.info')
-    await writeFile(desktop, credentialDocument('copilot.tencent.com'))
-    const store = storeFor(AI_VARIANT, desktop, join(root, 'own.json'))
+    const store = storeFor(root, AI_VARIANT)
+    await writeFile(store.ownAuthPath(), credentialDocument('copilot.tencent.com'))
 
     // Sending a CN token to the international endpoint would leak it across
     // products, so this is a refusal, not a fallback.
     await expect(store.current()).rejects.toThrow(/WorkBuddy \(CN\)/)
-    await expect(store.current()).rejects.toThrow(/WORKBUDDY_AI_AUTH_FILE/)
+    await expect(store.current()).rejects.toThrow(new RegExp(AI_VARIANT.ownFilename.replaceAll('.', String.raw`\.`)))
   })
 
   it('refuses an international credential offered to the CN provider', async () => {
     const root = await tempDir()
-    const desktop = join(root, 'workbuddy-desktop.info')
-    await writeFile(desktop, credentialDocument('www.workbuddy.ai'))
-    const store = storeFor(CN_VARIANT, desktop, join(root, 'own.json'))
+    const store = storeFor(root, CN_VARIANT)
+    await writeFile(store.ownAuthPath(), credentialDocument('www.workbuddy.ai'))
     await expect(store.current()).rejects.toThrow(/WorkBuddy AI/)
   })
 
   it('accepts the credential belonging to its own variant', async () => {
     const root = await tempDir()
-    const aiDesktop = join(root, 'ai.info')
-    await writeFile(aiDesktop, credentialDocument('www.workbuddy.ai'))
-    await expect(storeFor(AI_VARIANT, aiDesktop, join(root, 'ai-own.json')).current())
-      .resolves.toMatchObject({ domain: 'www.workbuddy.ai', uid: 'uid-1' })
+    const ai = storeFor(root, AI_VARIANT)
+    await writeFile(ai.ownAuthPath(), credentialDocument('www.workbuddy.ai'))
+    await expect(ai.current()).resolves.toMatchObject({ domain: 'www.workbuddy.ai', uid: 'uid-1' })
 
-    const cnDesktop = join(root, 'cn.info')
-    await writeFile(cnDesktop, credentialDocument('copilot.tencent.com'))
-    await expect(storeFor(CN_VARIANT, cnDesktop, join(root, 'cn-own.json')).current())
-      .resolves.toMatchObject({ domain: 'copilot.tencent.com' })
+    const cn = storeFor(root, CN_VARIANT)
+    await writeFile(cn.ownAuthPath(), credentialDocument('copilot.tencent.com'))
+    await expect(cn.current()).resolves.toMatchObject({ domain: 'copilot.tencent.com' })
   })
 
   it('reports a mismatch as a diagnosable reason rather than a silent sign-out', async () => {
     const root = await tempDir()
-    const desktop = join(root, 'workbuddy-desktop-ai.info')
-    await writeFile(desktop, credentialDocument('copilot.tencent.com'))
-    const status = await storeFor(AI_VARIANT, desktop, join(root, 'own.json')).status()
+    const store = storeFor(root, AI_VARIANT)
+    await writeFile(store.ownAuthPath(), credentialDocument('copilot.tencent.com'))
+    const status = await store.status()
     expect(status.state).toBe('signed-out')
     // The card renders this string, so it must name the fix.
-    expect(status.reason).toMatch(/WORKBUDDY_AI_AUTH_FILE/)
+    expect(status.reason).toMatch(/WorkBuddy \(CN\)/)
+    expect(status.reason).toMatch(new RegExp(AI_VARIANT.ownFilename.replaceAll('.', String.raw`\.`)))
   })
 
-  it('prefers the desktop identity over an older copy for the same account', async () => {
+  it('refuses to save a credential belonging to the other product', async () => {
     const root = await tempDir()
-    const ownPath = join(root, 'own.json')
-    const desktop = join(root, 'workbuddy-desktop.info')
-    const now = Date.now()
-    await writeFile(desktop, credentialDocument('copilot.tencent.com', 'desktop-token'))
-    // The plugin copy belongs to the *same* account but expires later: it wins,
-    // which is what makes a refresh by either side effective.
-    await writeFile(ownPath, JSON.stringify({
-      version: 1,
-      credential: {
-        accessToken: 'own-token', refreshToken: 'rt', expiresAtMs: now + 7_200_000,
-        domain: 'copilot.tencent.com', uid: 'uid-1', enterpriseId: 'ent-1', source: 'dsh',
-      },
-    }))
-    const store = storeFor(CN_VARIANT, desktop, ownPath)
-    await expect(store.current()).resolves.toMatchObject({ accessToken: 'own-token', source: 'dsh' })
+    const store = storeFor(root, AI_VARIANT)
+    await expect(store.save({
+      accessToken: 'at',
+      refreshToken: 'rt',
+      expiresAtMs: Date.now() + 3_600_000,
+      domain: 'copilot.tencent.com',
+      uid: 'uid-1',
+      source: 'login',
+    })).rejects.toThrow(/refusing to store a WorkBuddy \(CN\) credential/)
+    // Nothing was written for the mismatch.
+    await expect(store.current()).resolves.toBeUndefined()
   })
 
-  it('prefers the desktop file when the account has changed', async () => {
+  it('persists a credential saved for its own product', async () => {
     const root = await tempDir()
-    const ownPath = join(root, 'own.json')
-    const desktop = join(root, 'workbuddy-desktop.info')
-    const now = Date.now()
-    await writeFile(desktop, credentialDocument('copilot.tencent.com', 'desktop-token'))
-    // The plugin copy still belongs to the PREVIOUS account and expires later,
-    // because the plugin refreshed it. Choosing by expiry alone would send the
-    // old uid in `X-User-Id` and answer as the wrong user.
-    await writeFile(ownPath, JSON.stringify({
-      version: 1,
-      credential: {
-        accessToken: 'stale-own', refreshToken: 'rt', expiresAtMs: now + 7_200_000,
-        domain: 'copilot.tencent.com', uid: 'uid-OTHER', enterpriseId: 'ent-1', source: 'dsh',
-      },
-    }))
-    const store = storeFor(CN_VARIANT, desktop, ownPath)
-    await expect(store.current()).resolves.toMatchObject({ accessToken: 'desktop-token', uid: 'uid-1' })
-  })
-
-  it('reads the variant env var, not the CN one', async () => {
-    const root = await tempDir()
-    const aiFile = join(root, 'ai.info')
-    await writeFile(aiFile, credentialDocument('www.workbuddy.ai'))
-    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', aiFile)
-    vi.stubEnv('WORKBUDDY_AUTH_FILE', '/nonexistent/cn.info')
-    const store = new WorkBuddyCredentialStore({
-      variant: AI_VARIANT,
-      ownPath: join(root, 'own.json'),
-      refresh: async credential => ({ accessToken: credential.accessToken }),
+    const store = storeFor(root, CN_VARIANT)
+    await store.save({
+      accessToken: 'at',
+      refreshToken: 'rt',
+      expiresAtMs: Date.now() + 3_600_000,
+      domain: 'copilot.tencent.com',
+      uid: 'uid-1',
+      nickname: 'nick',
+      source: 'login',
     })
-    expect(store.desktopAuthPath()).toBe(aiFile)
-    await expect(store.current()).resolves.toMatchObject({ domain: 'www.workbuddy.ai' })
+    await expect(store.current()).resolves.toMatchObject({
+      accessToken: 'at',
+      domain: 'copilot.tencent.com',
+      uid: 'uid-1',
+      source: 'login',
+    })
+    // A reload of the same file by a fresh store keeps the credential.
+    await expect(storeFor(root, CN_VARIANT).current()).resolves.toMatchObject({ accessToken: 'at' })
+  })
+
+  it('reads only its own credential file', async () => {
+    const root = await tempDir()
+    const cn = storeFor(root, CN_VARIANT)
+    await writeFile(cn.ownAuthPath(), credentialDocument('copilot.tencent.com'))
+    // The international variant has its own file, still empty.
+    await expect(storeFor(root, AI_VARIANT).current()).resolves.toBeUndefined()
+    await expect(cn.current()).resolves.toMatchObject({ domain: 'copilot.tencent.com' })
   })
 
   it('own copies and diagnostics do not collide between variants', async () => {
     const root = await tempDir()
     vi.stubEnv('DSH_HOME', root)
+    // The default path is the plugin's per-profile data folder; point that at the
+    // temp root so this spec asserts the default layout without touching a real one.
+    vi.stubEnv(WORKBUDDY_DATA_DIR_ENV, root)
     const cn = new WorkBuddyCredentialStore({ variant: CN_VARIANT, refresh: async c => ({ accessToken: c.accessToken }) })
     const ai = new WorkBuddyCredentialStore({ variant: AI_VARIANT, refresh: async c => ({ accessToken: c.accessToken }) })
+    expect(cn.ownAuthPath()).toBe(join(root, CN_VARIANT.ownFilename))
+    expect(ai.ownAuthPath()).toBe(join(root, AI_VARIANT.ownFilename))
     expect(cn.ownAuthPath()).not.toBe(ai.ownAuthPath())
-    expect(cn.desktopAuthPath()).not.toBe(ai.desktopAuthPath())
 
     // logout removes only its own copy.
     await writeFile(ai.ownAuthPath(), '{}')
@@ -358,7 +341,7 @@ describe('international catalog parsing', () => {
     })
     const models = await client.fetchModels({
       accessToken: 'at', refreshToken: 'rt', expiresAtMs: 0,
-      domain: 'www.workbuddy.ai', uid: 'uid', source: 'desktop',
+      domain: 'www.workbuddy.ai', uid: 'uid', source: 'login',
     })
     expect(models.map(model => model.id)).toEqual(['hy3', 'ctx-model'])
     expect(resolver).toHaveBeenCalledTimes(1)
@@ -377,7 +360,7 @@ describe('international catalog parsing', () => {
     })
     await expect(client.fetchModels({
       accessToken: 'at', refreshToken: 'rt', expiresAtMs: 0,
-      domain: 'www.workbuddy.ai', uid: 'uid', source: 'desktop',
+      domain: 'www.workbuddy.ai', uid: 'uid', source: 'login',
     })).rejects.toThrow(/cli agent/)
     vi.unstubAllGlobals()
   })
@@ -515,7 +498,10 @@ describe('prepareInternationalChatBody', () => {
   })
 
   it('handles a JSON object with no messages array', () => {
-    expect(JSON.parse(prepareInternationalChatBody('{"model":"x"}'))).toEqual({ model: 'x', stream: true })
+    // The normalized body also carries the streaming usage request, which the
+    // official client always sends.
+    expect(JSON.parse(prepareInternationalChatBody('{"model":"x"}')))
+      .toEqual({ model: 'x', stream: true, stream_options: { include_usage: true } })
     expect(JSON.parse(prepareInternationalChatBody('{"messages":null}')).messages).toBeNull()
   })
 })
