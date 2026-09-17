@@ -97,8 +97,7 @@ An import is checked against the target product: offering an international crede
 
 | Plugin | Required DSH core | Desktop app |
 |---|---|---|
-| **0.6.1+** | `0.1.5-rc.1` or newer | not required |
-| **0.6.0** | `0.1.5-rc.1` or newer | not required |
+| **0.6.x** | `0.1.5-rc.1` or newer | not required |
 | **0.3.2 – 0.5.x** (international support since `0.5.0`) | `0.1.5-rc.1` or newer | `2.0.7`+ (bundled core `0.1.5-rc.1`) |
 | **0.3.0 – 0.3.1** | `0.1.2-rc.1` | `2.0.5` |
 | **0.2.6** | `0.1.1-rc.2` (older line) | `2.0.3` / `2.0.4` |
