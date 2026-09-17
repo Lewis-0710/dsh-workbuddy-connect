@@ -22,13 +22,13 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
-import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { workbuddyStateDir } from './paths.ts'
 import type { WorkBuddyUpstreamModel } from './upstream.ts'
 
 /** On-disk format this reader accepts; other versions are discarded. */
 const CATALOG_FORMAT_VERSION = 1
 
-/** Basename of the CN variant's saved catalog inside the Harness home. */
+/** Basename of the CN variant's saved catalog inside the plugin's config dir. */
 export const WORKBUDDY_CATALOG_FILENAME = '.workbuddy-catalog.json'
 
 /** One saved catalog: the account it belonged to, and the models it listed. */
@@ -49,9 +49,9 @@ interface CatalogDocument {
   entries: Record<string, SavedCatalog>
 }
 
-/** Plugin-owned saved-catalog path inside the Harness home. */
+/** Plugin-owned saved-catalog path inside the plugin's config directory. */
 export function workbuddyCatalogPath(filename: string = WORKBUDDY_CATALOG_FILENAME): string {
-  return join(resolveDshHome(), filename)
+  return join(workbuddyStateDir(), filename)
 }
 
 /** Whether a parsed value is a model row worth keeping. */

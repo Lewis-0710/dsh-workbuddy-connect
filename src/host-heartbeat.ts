@@ -14,10 +14,10 @@
 import { execFileSync } from 'node:child_process'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { workbuddyStateDir } from './paths.ts'
 import { WORKBUDDY_CONNECT_VERSION } from './version.ts'
 
-/** Basename of the host heartbeat file inside the Harness home. */
+/** Basename of the host heartbeat file inside the plugin's config directory. */
 export const WORKBUDDY_HOST_HEARTBEAT_FILENAME = '.workbuddy-host-heartbeat.json'
 
 /** Current on-disk heartbeat format; readers reject others. */
@@ -36,7 +36,7 @@ export interface WorkBuddyHostHeartbeat {
 
 /** Absolute path of the host heartbeat file. */
 export function workbuddyHostHeartbeatPath(): string {
-  return join(resolveDshHome(), WORKBUDDY_HOST_HEARTBEAT_FILENAME)
+  return join(workbuddyStateDir(), WORKBUDDY_HOST_HEARTBEAT_FILENAME)
 }
 
 /**

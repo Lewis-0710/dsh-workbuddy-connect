@@ -18,7 +18,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
-import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { workbuddyStateDir } from './paths.ts'
 import type { WorkBuddyModelInfo } from './catalog.ts'
 import type { WorkBuddyEffort } from './upstream.ts'
 
@@ -78,7 +78,7 @@ interface ProbeDocument {
 }
 
 /**
- * Plugin-owned probe record path inside the Harness home.
+ * Plugin-owned probe record path inside the plugin's config directory.
  *
  * One file per variant. Same-named models exist on both endpoints (the
  * international catalog repeats `glm-5.3`, `glm-5.2`, `hy3`, `kimi-k2.6`), and
@@ -87,7 +87,7 @@ interface ProbeDocument {
  * observation answer for the other. The paths differ; the format does not.
  */
 export function workbuddyProbePath(filename: string = WORKBUDDY_PROBE_FILENAME): string {
-  return join(resolveDshHome(), filename)
+  return join(workbuddyStateDir(), filename)
 }
 
 /**

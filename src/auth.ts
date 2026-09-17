@@ -15,15 +15,17 @@
  * @module dsh-workbuddy-connect/auth
  */
 
-import { readFileSync, readdirSync, realpathSync, type Dirent } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { mkdir, readFile, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
-import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { realmOf, regionOf } from './upstream.ts'
+import { workbuddyPluginDataDir, WORKBUDDY_DATA_DIR_ENV, WORKBUDDY_DATA_DIR_NAME } from './paths.ts'
 import type { WorkBuddyRegion, WorkBuddyRefreshOutcome } from './upstream.ts'
 import type { WorkBuddyVariant } from './variants.ts'
+
+// Re-exported for compatibility: existing callers import these from here.
+export { workbuddyPluginDataDir, WORKBUDDY_DATA_DIR_ENV, WORKBUDDY_DATA_DIR_NAME }
 
 /** The one provenance a stored credential can have: this plugin's own login. */
 export const WORKBUDDY_CREDENTIAL_SOURCE = 'login'
@@ -63,7 +65,7 @@ export interface WorkBuddyAuthStatus {
   region?: WorkBuddyRegion
   /**
    * Why no credential is usable, when the reason is diagnosable rather than
-   * "nobody has signed in" — a credential stored for the other realm being the
+   * "nobody has signed in" 鈥?a credential stored for the other realm being the
    * case that matters.
    */
   reason?: string
@@ -90,116 +92,6 @@ export const WORKBUDDY_AUTH_FILENAME = '.workbuddy-auth.json'
  * apart: DSH already separates a profile's installed plugins, and a credential
  * belongs to the profile that is running rather than to the machine.
  */
-export const WORKBUDDY_DATA_DIR_NAME = '.dsh-workbuddy-connect'
-
-/** Env var overriding the plugin's data directory; used by tests and by a host that sets one. */
-export const WORKBUDDY_DATA_DIR_ENV = 'DSH_WORKBUDDY_DATA_DIR'
-
-/** Harness-home subdirectory holding every profile. */
-const PROFILES_DIR_NAME = 'profiles'
-
-/** This plugin's package name, as a profile's manifest spells it. */
-const PLUGIN_PACKAGE_NAME = 'dsh-workbuddy-connect'
-
-/** This package's own root directory, or undefined when it cannot be determined. */
-function pluginPackageRoot(): string | undefined {
-  try {
-    // `<root>/lib/auth.js` in a build, `<root>/src/auth.ts` from source.
-    return dirname(dirname(fileURLToPath(import.meta.url)))
-  } catch {
-    // Not loaded from a file URL (a bundled or synthetic module).
-    return undefined
-  }
-}
-
-/**
- * Whether a profile directory declares this plugin.
- *
- * Read from the profile's manifest rather than inferred from this module's own
- * location, because DSH installs a plugin into a profile by *link*: the manifest
- * carries `"dsh-workbuddy-connect": "link:/path/to/checkout"`, while Node
- * resolves the module to that real path, which lies outside `$DSH_HOME` entirely.
- * Walking up from the module would therefore miss the profile for exactly the
- * install shape a developer uses.
- */
-function profileDeclaresPlugin(profileDir: string): boolean {
-  try {
-    const manifest = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8')) as {
-      dependencies?: Record<string, unknown>
-      devDependencies?: Record<string, unknown>
-    }
-    return typeof manifest.dependencies?.[PLUGIN_PACKAGE_NAME] === 'string'
-      || typeof manifest.devDependencies?.[PLUGIN_PACKAGE_NAME] === 'string'
-  } catch {
-    // Not a profile, or unreadable: it simply is not a candidate.
-    return false
-  }
-}
-
-/**
- * Whether a profile's installed copy of this plugin resolves to this package.
- *
- * This is what separates two profiles that both declare the plugin — a `web` and
- * a `desktop` profile can each list it — so the data directory follows the
- * profile whose copy is actually running rather than the first one found.
- */
-function profileLinksToThisPackage(profileDir: string): boolean {
-  const own = pluginPackageRoot()
-  if (own === undefined) return false
-  try {
-    return realpathSync(join(profileDir, 'node_modules', PLUGIN_PACKAGE_NAME)) === realpathSync(own)
-  } catch {
-    // No installed copy, or an unreadable link.
-    return false
-  }
-}
-
-/**
- * The profile directory this plugin belongs to, or undefined when none can be
- * determined.
- *
- * DSH does not export the active profile name to a plugin, so it is recovered
- * from the profiles themselves: the ones whose manifest declares this plugin,
- * narrowed to the one whose installed copy resolves to this package. A single
- * declaring profile is accepted without the second test, so a normal (non-linked)
- * install still resolves.
- */
-function discoverProfileDir(): string | undefined {
-  const profilesRoot = join(resolveDshHome(), PROFILES_DIR_NAME)
-  let entries: Dirent[]
-  try {
-    entries = readdirSync(profilesRoot, { withFileTypes: true })
-  } catch {
-    // No profiles directory at all: nothing to discover.
-    return undefined
-  }
-  const candidates: string[] = []
-  for (const entry of entries) {
-    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue
-    const dir = join(profilesRoot, entry.name)
-    if (profileDeclaresPlugin(dir)) candidates.push(dir)
-  }
-  if (candidates.length === 0) return undefined
-  if (candidates.length === 1) return candidates[0]
-  return candidates.find(candidate => profileLinksToThisPackage(candidate))
-}
-
-/**
- * The directory this plugin keeps its own files in: `<profile>/.dsh-workbuddy-connect`.
- *
- * Falls back to the Harness home when no profile can be discovered — a checkout
- * running its own tests, or a host that loads the plugin from outside a profile —
- * so the plugin always has somewhere to write, and `DSH_WORKBUDDY_DATA_DIR`
- * overrides either way.
- */
-export function workbuddyPluginDataDir(): string {
-  const override = process.env[WORKBUDDY_DATA_DIR_ENV]
-  if (override !== undefined && override.trim() !== '') return override
-  const base = discoverProfileDir() ?? resolveDshHome()
-  return join(base, WORKBUDDY_DATA_DIR_NAME)
-}
-
-/** Current on-disk format written by this plugin; readers accept older ones. */
 const OWN_FORMAT_VERSION = 1
 
 /** Normalize an expiry that may arrive in seconds or milliseconds. */
@@ -219,6 +111,11 @@ function isDocument(value: unknown): value is Record<string, unknown> {
 /**
  * Plugin-owned credential path used when no variant names its own file.
  *
+ * Credentials deliberately live at the DATA-DIRECTORY ROOT, outside `config/`
+ * (the user's ruling): a credential is secret material, not configuration, and
+ * keeping it apart from the rebuildable cache files makes "wipe the caches"
+ * a safe gesture that can never touch a credential.
+ *
  * @returns the path inside the plugin's data directory.
  */
 export function workbuddyOwnAuthPath(): string {
@@ -233,8 +130,8 @@ export function workbuddyOwnAuthPath(): string {
  *
  * Tolerance is deliberate: this is a published cross-tool format, and a file
  * written by a sibling tool must keep loading rather than silently signing the
- * user out. Two spellings of "which realm" are accepted — a top-level `region`
- * and a nested `auth.realm` — because both are in use.
+ * user out. Two spellings of "which realm" are accepted 鈥?a top-level `region`
+ * and a nested `auth.realm` 鈥?because both are in use.
  */
 export function parseWorkBuddyAuth(text: string): WorkBuddyCredential | undefined {
   let parsed: unknown
@@ -541,7 +438,7 @@ export class WorkBuddyCredentialStore {
     // write of a fresh install is what brings it into being, and a lock or write
     // into a directory that does not exist yet fails outright.
     await mkdir(dirname(this.ownPath), { recursive: true, mode: 0o700 })
-    // Written atomically — a temporary file renamed over the target — so no
+    // Written atomically 鈥?a temporary file renamed over the target 鈥?so no
     // reader ever observes a half-written credential, and no lock file is left
     // beside it. Concurrent writers are already serialized in-process by the
     // store's single-flight refresh; across processes the rename means the last

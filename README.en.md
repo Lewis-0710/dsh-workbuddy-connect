@@ -24,6 +24,21 @@ Both the CN **WorkBuddy** and the international **WorkBuddy AI** are supported: 
 
 - **Status and detection**: Settings → Plugins → the matching card shows the account, token validity, remaining credit, and model offers. It also lets you refresh the model list manually and shows whether the current list came from the upstream or from the built-in fallback, and provides manual reasoning-level detection for eligible models.
 
+- **Sidebar credit display ("WorkBuddy sidebar display")**: Settings → Plugins → the topmost "WorkBuddy sidebar display" card turns the sidebar credit card on per version, with a customizable refresh interval (5 minutes by default, 1 minute minimum). When on, a credit card for that version appears at the bottom of the sidebar, next to Settings.
+
+![WorkBuddy sidebar display settings](assets/8.png)
+
+- **Credit details on click**: click the sidebar credit card to open that version's credit details in the center panel (click the same card again to close it; click the other card to switch versions). The panel switches between versions with tabs and shows:
+
+  - **Overview**: the account nickname, total remaining credit, an overall bar, and its share of this cycle's granted total;
+  - **Detail table**: one row per package — "package name | remaining / total + mini bar | expiry", **listed individually, unmerged, exhausted ones included**, complementing the merged overview in the sidebar; spent-but-not-yet-expired packages sort last, expired ones are not shown.
+
+  Data is forwarded through DSH locally (the browser never holds credentials), and the sidebar card and the details page share the same latest result: refreshing either side updates both. To go easy on the billing endpoint, reopening the details page within the refresh interval reuses the cache; the "Refresh" button forces a fresh read.
+
+![CN credit details](assets/6.png)
+
+![International credit details](assets/7.png)
+
 - **Enterprise credit**: on the CN product, enterprise accounts (non-empty `enterpriseId`) read their cycle quota from the enterprise billing endpoint, and the card shows an "enterprise quota" row with the cycle reset time.
 
 - **Rate**: every model name carries its credits multiplier (e.g. `GLM-5.2 · x0.79`, `Hy3 · x0.00`) in both the `/model` popup and the composer's model dropdown. The rate is display-only and never affects requests.
@@ -82,7 +97,8 @@ An import is checked against the target product: offering an international crede
 
 | Plugin | Required DSH core | Desktop app |
 |---|---|---|
-| **0.6.0+** | `0.1.5-rc.1` or newer | not required |
+| **0.6.1+** | `0.1.5-rc.1` or newer | not required |
+| **0.6.0** | `0.1.5-rc.1` or newer | not required |
 | **0.3.2 – 0.5.x** (international support since `0.5.0`) | `0.1.5-rc.1` or newer | `2.0.7`+ (bundled core `0.1.5-rc.1`) |
 | **0.3.0 – 0.3.1** | `0.1.2-rc.1` | `2.0.5` |
 | **0.2.6** | `0.1.1-rc.2` (older line) | `2.0.3` / `2.0.4` |
@@ -148,9 +164,27 @@ Scoped per profile, under `$DSH_HOME/profiles/<profile>/.dsh-workbuddy-connect/`
 
 **How the profile is determined**: DSH does not expose the active profile name to a plugin, so the plugin looks under `$DSH_HOME/profiles/` for the profile whose `package.json` **declares this plugin**; if several do, it narrows to the one whose installed copy points at this same code. The web, desktop, and TUI profiles therefore each keep their own sign-in. When none can be determined (running from a source checkout, say) it falls back to `$DSH_HOME/.dsh-workbuddy-connect/`; `DSH_WORKBUDDY_DATA_DIR` overrides either way.
 
-Each directory holds the credential `.json` and nothing else — no `.lock` and no leftover temporary file (writes go through a temporary file renamed into place).
+### Data file layout (0.6.1)
 
-`logout` removes only that version's own file and leaves the other alone.
+The plugin's data files live on two levels: **credentials at the data-directory root** (secret material, kept apart from rebuildable caches so "wipe the caches" can never touch a credential), and **everything rebuildable inside `state/`**:
+
+```
+$DSH_HOME/profiles/<profile>/.dsh-workbuddy-connect/
+├── .workbuddy-auth.json             # CN credential
+├── .workbuddy-ai-auth.json          # international credential
+└── state/
+    ├── .workbuddy-catalog.json          # CN saved catalog
+    ├── .workbuddy-ai-catalog.json       # international saved catalog
+    ├── .workbuddy-probe.json            # CN reasoning-probe records
+    ├── .workbuddy-ai-probe.json         # international reasoning-probe records
+    └── .workbuddy-host-heartbeat.json   # host heartbeat (for the status CLI)
+```
+
+Upgrading from 0.6.0: files at the old locations (the `$DSH_HOME` root) are not migrated automatically. For credentials, re-signing in via "Switch account" or `import --file` is recommended; cache files (catalog/probe/heartbeat) can simply be deleted — the plugin recreates them under `state/` as needed.
+
+Every file is written atomically (temporary file + rename) — no `.lock`, no leftover temporary file.
+
+`logout` removes only that version's own credential file and leaves the other alone; it never touches the caches under `state/`.
 
 ## Known limitations
 
@@ -160,6 +194,7 @@ Each directory holds the credential `.json` and nothing else — no `.lock` and 
 - **The international version's model catalog comes from the app's own interface**: the service splits it by User-Agent, which is a private implementation detail that a server-side change can break. When that happens the plugin degrades to this account's last successful catalog and then to its built-in roster, showing the source (live / saved / built-in), the fetch time, and the failure reason on the card — but long-term compatibility is not guaranteed. The CN version's catalog uses the same interface as the official CLI and is unaffected.
 - **International catalog User-Agent version**: on Windows / WSL / Linux the international app's version cannot be read, so the saved value or the built-in default is used. This concerns the catalog request only; signing in does not depend on the desktop app.
 - **Behaviour with no credential**: a version nobody has signed in to shows no model group, because every model it could list would fail on use. The group appears as soon as you sign in.
+- **Sidebar display request throttling**: the sidebar cards and the details page share one data snapshot, throttled by the configured interval — reopening the page or panel within the interval reuses the cache instead of hitting the billing endpoint again; the "Refresh" button on the details page bypasses the interval and forces a fresh read. A very short interval means a correspondingly higher request rate against the billing endpoint, so set it with care.
 - **The enterprise credit path currently covers the CN product only**: the international enterprise billing interface is unverified, so those accounts still read through the personal endpoint pending measurement. The enterprise branch could not be tested locally (the development machine holds a personal account); it was implemented from the official app's interface contract, and reports from enterprise users are welcome.
 - Relies on WorkBuddy client interfaces (not a public API); the plugin may need updates as WorkBuddy changes.
 

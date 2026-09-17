@@ -22,7 +22,7 @@ import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
-import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { workbuddyStateDir } from './paths.ts'
 import {
   FALLBACK_APP_VERSION,
   readBundleVersion,
@@ -157,7 +157,7 @@ async function installedCnApp(): Promise<{ version: string; bundle: string } | u
 
 /** Default CN saved-cache path. */
 function cnSavedVersionPath(): string {
-  return join(resolveDshHome(), CN_APP_VERSION_FILENAME)
+  return join(workbuddyStateDir(), CN_APP_VERSION_FILENAME)
 }
 
 /**

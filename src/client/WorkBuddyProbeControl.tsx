@@ -238,14 +238,18 @@ function tooltipText(
 export function WorkBuddyProbeControl({ directory, t }: WorkBuddyProbeControlProps) {
   const subscribe = useCallback((listener: () => void) => directory.subscribe(listener), [directory])
   const snapshot = useCallback(() => directory.getSnapshot(), [directory])
+  // `current` is `ModelSelection | null` (the directory contract), so the guard
+  // must cover null too — `=== undefined` let a null selection through and the
+  // `.provider` read crashed the seat on every load ("slot entry crashed in
+  // 'conversation.input.right'").
   const selection = useSyncExternalStore(subscribe, snapshot, snapshot).current
-  const card = selection === undefined ? undefined : cardVariantFor(selection.provider)
+  const card = selection == null ? undefined : cardVariantFor(selection.provider)
   // `card` identifies both the variant and its routes: a selection under either
   // provider resolves to exactly one card's status/probe pair, so the control
   // can never read one variant's state while probing the other.
-  const key = card === undefined || selection === undefined ? undefined : `${card.id}:${selection.model}`
+  const key = card === undefined || selection == null ? undefined : `${card.id}:${selection.model}`
   // A new selection gets fresh state; a late response cannot target the new model.
-  return card === undefined || selection === undefined || key === undefined
+  return card === undefined || selection == null || key === undefined
     ? null
     : <ModelProbe key={key} model={selection.model} card={card} label={useLabel(t)} t={t} />
 }

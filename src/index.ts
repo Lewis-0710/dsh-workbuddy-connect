@@ -193,6 +193,17 @@ export const WORKBUDDY_SETTINGS_NS = 'workbuddy' as SettingsNamespace
 export const WORKBUDDY_AI_SETTINGS_NS = 'workbuddy-ai' as SettingsNamespace
 
 /**
+ * Settings namespace owning the shared quota-card section.
+ *
+ * One card above the two variant cards configures both sidebar quota widgets
+ * (CN and international) from a single place, so its toggles cannot live in
+ * either variant's section — they are per-variant fields on a cross-variant
+ * card. The Plugins tab dispatches by namespace, so this section is what makes
+ * that card render (see {@link WORKBUDDY_AI_SETTINGS_NS} for the mechanism).
+ */
+export const WORKBUDDY_QUOTA_SETTINGS_NS = 'workbuddy-quota' as SettingsNamespace
+
+/**
  * How often the credential files are re-checked, in milliseconds.
  *
  * A startup-only catalog fetch cannot notice a sign-in that happens while DSH
@@ -245,6 +256,17 @@ export interface Config {
   probeConsent?: boolean
   /** Use the largest context window the international catalog explicitly offers. */
   useMaximumContextWindow?: boolean
+  /** Show the CN variant's sidebar quota card. */
+  sidebarQuotaCN?: boolean
+  /** Show the international variant's sidebar quota card. */
+  sidebarQuotaAI?: boolean
+  /**
+   * Sidebar quota refresh interval in milliseconds. One shared value (both
+   * cards poll on it) because the two widgets hit the same rate-limited
+   * upstream family; the floor guards against a typo hammering the billing
+   * endpoint, which serves no cache.
+   */
+  quotaPollMs?: number
 }
 
 /** Probe authorization (shared by the plugin schema and the CN section). */
@@ -253,9 +275,29 @@ const PROBE_CONSENT_FIELD = z.boolean().default(false)
 const MAXIMUM_CONTEXT_WINDOW_FIELD = z.boolean().default(true)
   .description('Use the largest context window declared by WorkBuddy AI when alternatives are available (on by default)')
 
+/** Sidebar quota toggle (one per variant; both live on the shared quota card). */
+const QUOTA_TOGGLE_FIELD = z.boolean().default(false)
+  .description('Show this variant\u2019s remaining-credit card in the sidebar footer (off by default)')
+/**
+ * Quota poll interval: default 5 minutes, floor 1 minute. The status route
+ * performs a live upstream billing call per request with no cache, so an
+ * aggressively small interval translates directly into upstream load; the
+ * floor is the smallest value the UI offers rather than a silent clamp —
+ * smaller staged values fail Host validation and refuse to save.
+ */
+export const QUOTA_POLL_DEFAULT_MS = 300_000
+export const QUOTA_POLL_MIN_MS = 60_000
+const QUOTA_POLL_FIELD = z.number()
+  .default(QUOTA_POLL_DEFAULT_MS)
+  .min(QUOTA_POLL_MIN_MS)
+  .description('Sidebar quota card refresh interval in milliseconds (default 300000, minimum 60000)')
+
 export const Config: z<Config> = z.object({
   probeConsent: PROBE_CONSENT_FIELD,
   useMaximumContextWindow: MAXIMUM_CONTEXT_WINDOW_FIELD,
+  sidebarQuotaCN: QUOTA_TOGGLE_FIELD,
+  sidebarQuotaAI: QUOTA_TOGGLE_FIELD,
+  quotaPollMs: QUOTA_POLL_FIELD,
 })
 
 /**
@@ -274,6 +316,19 @@ const CN_SECTION: z<Config> = z.object({
 /** The international card's settings section and its context-window preference. */
 const AI_SECTION: z<Config> = z.object({
   useMaximumContextWindow: MAXIMUM_CONTEXT_WINDOW_FIELD,
+})
+
+/**
+ * The shared quota card's section: both sidebar toggles and the poll interval.
+ *
+ * Only these fields — the card edits nothing else, and the Plugins tab pairs a
+ * card with the section whose namespace it names, so a stray field here would
+ * render as a control no other surface reads.
+ */
+const QUOTA_SECTION: z<Config> = z.object({
+  sidebarQuotaCN: QUOTA_TOGGLE_FIELD,
+  sidebarQuotaAI: QUOTA_TOGGLE_FIELD,
+  quotaPollMs: QUOTA_POLL_FIELD,
 })
 
 /** One variant's live runtime, assembled by {@link createVariantRuntime}. */
@@ -851,14 +906,18 @@ export function apply(ctx: Context, config: Config): void {
   // user-editable sections, as before.
   ctx.inject(['settings'], settingsCtx => {
     /** Section sources; each falls back to its own slice when its side unloads. */
-    const sources: { cn: () => Config, ai: () => Config } = {
+    const sources: { cn: () => Config, ai: () => Config, quota: () => Config } = {
       cn: () => config,
       ai: () => config,
+      quota: () => config,
     }
     /** Merge both sections into the whole config the rest of the plugin reads. */
     const merged = (): Config => ({
       ...sources.cn().probeConsent === undefined ? {} : { probeConsent: sources.cn().probeConsent },
       ...sources.ai().useMaximumContextWindow === undefined ? {} : { useMaximumContextWindow: sources.ai().useMaximumContextWindow },
+      ...sources.quota().sidebarQuotaCN === undefined ? {} : { sidebarQuotaCN: sources.quota().sidebarQuotaCN },
+      ...sources.quota().sidebarQuotaAI === undefined ? {} : { sidebarQuotaAI: sources.quota().sidebarQuotaAI },
+      ...sources.quota().quotaPollMs === undefined ? {} : { quotaPollMs: sources.quota().quotaPollMs },
     })
     const applyMaximumContextWindow = (next: Config): void => {
       const runtime = runtimes.find(candidate => candidate.variant.id !== CN_VARIANT.id)
@@ -874,6 +933,10 @@ export function apply(ctx: Context, config: Config): void {
     settingsCtx.settings.installSection(ctx, WORKBUDDY_AI_SETTINGS_NS, AI_SECTION, config, {
       setSource(source) { sources.ai = source as () => Config; current = merged },
       onChange: repointStores,
+    })
+    settingsCtx.settings.installSection(ctx, WORKBUDDY_QUOTA_SETTINGS_NS, QUOTA_SECTION, config, {
+      setSource(source) { sources.quota = source as () => Config; current = merged },
+      onChange: () => {},
     })
     setMaximumContextWindow = async enabled => {
       await settingsCtx.settings.update(WORKBUDDY_AI_SETTINGS_NS, { useMaximumContextWindow: enabled })

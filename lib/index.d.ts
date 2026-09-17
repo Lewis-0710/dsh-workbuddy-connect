@@ -5,6 +5,41 @@ import { IncomingMessage, ServerResponse } from "node:http";
 import { Context } from "@deepseek-ai/cordis";
 import { SettingsNamespace } from "@deepseek-ai/dsh-settings";
 import { AttachmentStore } from "@deepseek-ai/dsh-attachment";
+//#region src/paths.d.ts
+/**
+ * The plugin's data directory — the ONE place every file the plugin owns
+ * lives.
+ *
+ * Layout: `<profile>/.dsh-workbuddy-connect/config/` (the profile discovered
+ * the same way the credential store always did). Everything — credentials,
+ * saved catalogs, probe results, the host heartbeat, App-version caches —
+ * writes there, so a profile directory never collects loose `.workbuddy-*`
+ * files and the whole plugin's footprint is one folder.
+ *
+ * Fallbacks, in order: `DSH_WORKBUDDY_DATA_DIR` env override → the discovered
+ * profile → the Harness home (a checkout running its own tests, or a host
+ * loading the plugin from outside any profile).
+ *
+ * Split out of `auth.ts` so catalog/probe/heartbeat stores can import the
+ * directory without pulling in the credential code (and its upstream
+ * dependency) — these modules stay leaf-light on purpose.
+ *
+ * @module dsh-workbuddy-connect/paths
+ */
+/** The per-profile directory the plugin's data folder lives under. */
+declare const WORKBUDDY_DATA_DIR_NAME = ".dsh-workbuddy-connect";
+/** Environment override for the whole data directory. */
+declare const WORKBUDDY_DATA_DIR_ENV = "DSH_WORKBUDDY_DATA_DIR";
+/**
+ * The plugin's data directory: `<profile>/.dsh-workbuddy-connect`.
+ *
+ * Falls back to the Harness home when no profile can be discovered — a
+ * checkout running its own tests, or a host that loads the plugin from
+ * outside a profile — so the plugin always has somewhere to write, and
+ * `DSH_WORKBUDDY_DATA_DIR` overrides either way.
+ */
+declare function workbuddyPluginDataDir(): string;
+//#endregion
 //#region src/app-version.d.ts
 /** Basename of the saved version under `$DSH_HOME`. */
 declare const WORKBUDDY_APP_VERSION_FILENAME = ".workbuddy-ai-version.json";
@@ -299,10 +334,28 @@ interface WorkBuddyCreditAccount {
   remain: number;
   size: number;
   unlimited?: true;
+  /**
+   * When this package's credit expires, verbatim from the upstream
+   * `PackageEndTime` field (`"YYYY-MM-DD HH:mm:ss"`, a UTC+8 wall-clock
+   * string; the field name is corroborated by the request body's own
+   * `PackageEndTimeRange*` filters and by workbuddy2api's parser). An absent
+   * value means the upstream reported no expiry for this package — rendered
+   * as "no expiry", never guessed into a date.
+   */
+  packageEndTime?: string;
 }
 /** Aggregated credit answer for one credential. */
 interface WorkBuddyCredits {
   total: number;
+  /**
+   * The summed per-package totals (size), i.e. the account's total granted
+   * credit this cycle — the denominator for the dashboard's overall bar.
+   * The upstream's own `TotalDosage` acts as a FLOOR when it is larger
+   * (workbuddy2api's `ResourceSummary` ruling: consumed credit cannot exceed
+   * the total dosage), never as a fabricated value when the packages already
+   * sum higher.
+   */
+  totalSize?: number;
   accounts: readonly WorkBuddyCreditAccount[];
   /**
    * The account's cycle quota is uncapped (`limitNum === -1` on the CN
@@ -629,7 +682,7 @@ interface WorkBuddyAuthStatus {
   region?: WorkBuddyRegion;
   /**
    * Why no credential is usable, when the reason is diagnosable rather than
-   * "nobody has signed in" — a credential stored for the other realm being the
+   * "nobody has signed in" 鈥?a credential stored for the other realm being the
    * case that matters.
    */
   reason?: string;
@@ -647,26 +700,12 @@ interface WorkBuddyStoreOptions {
 /** Basename of the plugin-owned credential file inside the plugin's data directory. */
 declare const WORKBUDDY_AUTH_FILENAME = ".workbuddy-auth.json";
 /**
- * Name of the folder this plugin keeps its own files in.
- *
- * Scoped per profile, so the two plugins' state and two profiles' sign-ins stay
- * apart: DSH already separates a profile's installed plugins, and a credential
- * belongs to the profile that is running rather than to the machine.
- */
-declare const WORKBUDDY_DATA_DIR_NAME = ".dsh-workbuddy-connect";
-/** Env var overriding the plugin's data directory; used by tests and by a host that sets one. */
-declare const WORKBUDDY_DATA_DIR_ENV = "DSH_WORKBUDDY_DATA_DIR";
-/**
- * The directory this plugin keeps its own files in: `<profile>/.dsh-workbuddy-connect`.
- *
- * Falls back to the Harness home when no profile can be discovered — a checkout
- * running its own tests, or a host that loads the plugin from outside a profile —
- * so the plugin always has somewhere to write, and `DSH_WORKBUDDY_DATA_DIR`
- * overrides either way.
- */
-declare function workbuddyPluginDataDir(): string;
-/**
  * Plugin-owned credential path used when no variant names its own file.
+ *
+ * Credentials deliberately live at the DATA-DIRECTORY ROOT, outside `config/`
+ * (the user's ruling): a credential is secret material, not configuration, and
+ * keeping it apart from the rebuildable cache files makes "wipe the caches"
+ * a safe gesture that can never touch a credential.
  *
  * @returns the path inside the plugin's data directory.
  */
@@ -679,8 +718,8 @@ declare function workbuddyOwnAuthPath(): string;
  *
  * Tolerance is deliberate: this is a published cross-tool format, and a file
  * written by a sibling tool must keep loading rather than silently signing the
- * user out. Two spellings of "which realm" are accepted — a top-level `region`
- * and a nested `auth.realm` — because both are in use.
+ * user out. Two spellings of "which realm" are accepted 鈥?a top-level `region`
+ * and a nested `auth.realm` 鈥?because both are in use.
  */
 declare function parseWorkBuddyAuth(text: string): WorkBuddyCredential | undefined;
 /**
@@ -848,7 +887,7 @@ interface WorkBuddyProbeRecord {
   account?: string;
 }
 /**
- * Plugin-owned probe record path inside the Harness home.
+ * Plugin-owned probe record path inside the plugin's config directory.
  *
  * One file per variant. Same-named models exist on both endpoints (the
  * international catalog repeats `glm-5.3`, `glm-5.2`, `hy3`, `kimi-k2.6`), and
@@ -996,7 +1035,7 @@ interface WorkBuddyAdapter {
 declare function createWorkBuddyAdapter(options: WorkBuddyAdapterOptions): WorkBuddyAdapter;
 //#endregion
 //#region src/catalog-store.d.ts
-/** Basename of the CN variant's saved catalog inside the Harness home. */
+/** Basename of the CN variant's saved catalog inside the plugin's config dir. */
 declare const WORKBUDDY_CATALOG_FILENAME = ".workbuddy-catalog.json";
 /** One saved catalog: the account it belonged to, and the models it listed. */
 interface SavedCatalog {
@@ -1010,7 +1049,7 @@ interface SavedCatalog {
   /** App version used as the UA, when the variant needed one. */
   appVersion?: string;
 }
-/** Plugin-owned saved-catalog path inside the Harness home. */
+/** Plugin-owned saved-catalog path inside the plugin's config directory. */
 declare function workbuddyCatalogPath(filename?: string): string;
 /** Options for {@link WorkBuddyCatalogStore}. */
 interface WorkBuddyCatalogStoreOptions {
@@ -1321,7 +1360,7 @@ declare function registerWorkBuddyLoginRoute(ctx: Context, deps: WorkBuddyLoginR
  *
  * @module dsh-workbuddy-connect/host-heartbeat
  */
-/** Basename of the host heartbeat file inside the Harness home. */
+/** Basename of the host heartbeat file inside the plugin's config directory. */
 declare const WORKBUDDY_HOST_HEARTBEAT_FILENAME = ".workbuddy-host-heartbeat.json";
 /** Current on-disk heartbeat format; readers reject others. */
 declare const HEARTBEAT_FORMAT_VERSION = 1;
@@ -1403,6 +1442,16 @@ declare const WORKBUDDY_SETTINGS_NS: SettingsNamespace;
  * installed section whose namespace equals the card's slot key.
  */
 declare const WORKBUDDY_AI_SETTINGS_NS: SettingsNamespace;
+/**
+ * Settings namespace owning the shared quota-card section.
+ *
+ * One card above the two variant cards configures both sidebar quota widgets
+ * (CN and international) from a single place, so its toggles cannot live in
+ * either variant's section — they are per-variant fields on a cross-variant
+ * card. The Plugins tab dispatches by namespace, so this section is what makes
+ * that card render (see {@link WORKBUDDY_AI_SETTINGS_NS} for the mechanism).
+ */
+declare const WORKBUDDY_QUOTA_SETTINGS_NS: SettingsNamespace;
 /** Plugin configuration. */
 interface Config {
   /**
@@ -1413,7 +1462,27 @@ interface Config {
   probeConsent?: boolean;
   /** Use the largest context window the international catalog explicitly offers. */
   useMaximumContextWindow?: boolean;
+  /** Show the CN variant's sidebar quota card. */
+  sidebarQuotaCN?: boolean;
+  /** Show the international variant's sidebar quota card. */
+  sidebarQuotaAI?: boolean;
+  /**
+   * Sidebar quota refresh interval in milliseconds. One shared value (both
+   * cards poll on it) because the two widgets hit the same rate-limited
+   * upstream family; the floor guards against a typo hammering the billing
+   * endpoint, which serves no cache.
+   */
+  quotaPollMs?: number;
 }
+/**
+ * Quota poll interval: default 5 minutes, floor 1 minute. The status route
+ * performs a live upstream billing call per request with no cache, so an
+ * aggressively small interval translates directly into upstream load; the
+ * floor is the smallest value the UI offers rather than a silent clamp —
+ * smaller staged values fail Host validation and refuse to save.
+ */
+declare const QUOTA_POLL_DEFAULT_MS = 300000;
+declare const QUOTA_POLL_MIN_MS = 60000;
 declare const Config: z<Config>;
 /**
  * Start both variants: their loopback endpoints, the `workbuddy` and
@@ -1427,4 +1496,4 @@ declare const Config: z<Config>;
  */
 declare function apply(ctx: Context, config: Config): void;
 //#endregion
-export { AI_VARIANT, type AppVersionInfo, CN_APP_VERSION_FILENAME, CN_VARIANT, type ChatIdentity, Config, FALLBACK_CN_APP_VERSION, FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS, LOGIN_PENDING_CODE, PROBE_EFFORT_CANDIDATES, type ProbeAttempt, type ProbeOutcome, type ProbeSender, type ResolveChatIdentityOptions, type UpstreamErrorKind, WORKBUDDY_AI_LOGIN_PATH, WORKBUDDY_AI_SETTINGS_NS, WORKBUDDY_APP_VERSION_FILENAME, WORKBUDDY_AUTH_FILENAME, WORKBUDDY_CATALOG_FILENAME, WORKBUDDY_CREDENTIAL_SOURCE, WORKBUDDY_DATA_DIR_ENV, WORKBUDDY_DATA_DIR_NAME, WORKBUDDY_HOST_HEARTBEAT_FILENAME, WORKBUDDY_LOGIN_PATH, WORKBUDDY_PROBE_FILENAME, WORKBUDDY_PROVIDER, WORKBUDDY_SETTINGS_NS, WORKBUDDY_STREAM_IDLE_TIMEOUT_MS, WORKBUDDY_VARIANTS, type WorkBuddyAdapter, type WorkBuddyAppVersionSource, type WorkBuddyAuthStatus, WorkBuddyCatalog, type WorkBuddyCatalogFetch, WorkBuddyCatalogStore, type WorkBuddyChatResult, type WorkBuddyCredential, WorkBuddyCredentialStore, type WorkBuddyCredits, type WorkBuddyEffort, type WorkBuddyHostHeartbeat, type WorkBuddyLoginAccount, type WorkBuddyLoginAttempt, WorkBuddyLoginClient, type WorkBuddyLoginPoll, type WorkBuddyLoginRouteOptions, type WorkBuddyLoginTokens, type WorkBuddyModelBilling, type WorkBuddyModelInfo, type WorkBuddyModelReasoning, type WorkBuddyProbeRecord, WorkBuddyProbeService, type WorkBuddyProbeStatus, WorkBuddyProbeStore, type WorkBuddyProbeValidation, type WorkBuddyPromotion, type WorkBuddyRefreshOutcome, type WorkBuddyShim, WorkBuddyUpstreamClient, type WorkBuddyUpstreamModel, type WorkBuddyVariant, type WorkBuddyWebLoginAction, type WorkBuddyWebLoginRequest, type WorkBuddyWebLoginResult, appUserAgent, apply, chatUserAgent, classifyUpstreamError, clearHostHeartbeat, createLoginKey, createWorkBuddyAdapter, createWorkBuddyShim, fallbackChatIdentity, fingerprintModel, inject, installedAppVersion, isHeartbeatProcessAlive, modelWithCurrentPromotion, name, normalizeCredits, normalizeLoginRegion, parseModelCatalog, parseWorkBuddyAuth, prepareChatBody, prepareInternationalChatBody, probeModel, processStartTimeMs, randomSentinel, readBundleVersion, readCliVersion, readHostHeartbeat, regionOf, registerWorkBuddyLoginRoute, resolveAppVersion, resolveChatIdentity, resolveLoginRegion, validAppVersion, validCliVersion, variantFor, workBuddyLoginHandler, workbuddyCatalogPath, workbuddyHostHeartbeatPath, workbuddyOwnAuthPath, workbuddyPluginDataDir, workbuddyProbePath };
+export { AI_VARIANT, type AppVersionInfo, CN_APP_VERSION_FILENAME, CN_VARIANT, type ChatIdentity, Config, FALLBACK_CN_APP_VERSION, FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS, LOGIN_PENDING_CODE, PROBE_EFFORT_CANDIDATES, type ProbeAttempt, type ProbeOutcome, type ProbeSender, QUOTA_POLL_DEFAULT_MS, QUOTA_POLL_MIN_MS, type ResolveChatIdentityOptions, type UpstreamErrorKind, WORKBUDDY_AI_LOGIN_PATH, WORKBUDDY_AI_SETTINGS_NS, WORKBUDDY_APP_VERSION_FILENAME, WORKBUDDY_AUTH_FILENAME, WORKBUDDY_CATALOG_FILENAME, WORKBUDDY_CREDENTIAL_SOURCE, WORKBUDDY_DATA_DIR_ENV, WORKBUDDY_DATA_DIR_NAME, WORKBUDDY_HOST_HEARTBEAT_FILENAME, WORKBUDDY_LOGIN_PATH, WORKBUDDY_PROBE_FILENAME, WORKBUDDY_PROVIDER, WORKBUDDY_QUOTA_SETTINGS_NS, WORKBUDDY_SETTINGS_NS, WORKBUDDY_STREAM_IDLE_TIMEOUT_MS, WORKBUDDY_VARIANTS, type WorkBuddyAdapter, type WorkBuddyAppVersionSource, type WorkBuddyAuthStatus, WorkBuddyCatalog, type WorkBuddyCatalogFetch, WorkBuddyCatalogStore, type WorkBuddyChatResult, type WorkBuddyCredential, WorkBuddyCredentialStore, type WorkBuddyCredits, type WorkBuddyEffort, type WorkBuddyHostHeartbeat, type WorkBuddyLoginAccount, type WorkBuddyLoginAttempt, WorkBuddyLoginClient, type WorkBuddyLoginPoll, type WorkBuddyLoginRouteOptions, type WorkBuddyLoginTokens, type WorkBuddyModelBilling, type WorkBuddyModelInfo, type WorkBuddyModelReasoning, type WorkBuddyProbeRecord, WorkBuddyProbeService, type WorkBuddyProbeStatus, WorkBuddyProbeStore, type WorkBuddyProbeValidation, type WorkBuddyPromotion, type WorkBuddyRefreshOutcome, type WorkBuddyShim, WorkBuddyUpstreamClient, type WorkBuddyUpstreamModel, type WorkBuddyVariant, type WorkBuddyWebLoginAction, type WorkBuddyWebLoginRequest, type WorkBuddyWebLoginResult, appUserAgent, apply, chatUserAgent, classifyUpstreamError, clearHostHeartbeat, createLoginKey, createWorkBuddyAdapter, createWorkBuddyShim, fallbackChatIdentity, fingerprintModel, inject, installedAppVersion, isHeartbeatProcessAlive, modelWithCurrentPromotion, name, normalizeCredits, normalizeLoginRegion, parseModelCatalog, parseWorkBuddyAuth, prepareChatBody, prepareInternationalChatBody, probeModel, processStartTimeMs, randomSentinel, readBundleVersion, readCliVersion, readHostHeartbeat, regionOf, registerWorkBuddyLoginRoute, resolveAppVersion, resolveChatIdentity, resolveLoginRegion, validAppVersion, validCliVersion, variantFor, workBuddyLoginHandler, workbuddyCatalogPath, workbuddyHostHeartbeatPath, workbuddyOwnAuthPath, workbuddyPluginDataDir, workbuddyProbePath };

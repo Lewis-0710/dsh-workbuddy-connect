@@ -149,11 +149,27 @@ export interface WorkBuddyWebCreditAccount {
   remain: number
   size: number
   unlimited?: true
+  /**
+   * The package's expiry as the upstream reported it (`"YYYY-MM-DD HH:mm:ss"`,
+   * UTC+8 wall clock), absent when the upstream reported none. Renderers group
+   * by it but never parse it into a date for display — an unparseable string
+   * stays opaque rather than becoming a fabricated date.
+   */
+  packageEndTime?: string
 }
 
 /** Aggregated credit answer rendered by the plugin card. */
 export interface WorkBuddyWebCredits {
+  /** Summed remaining credit across all packages. */
   total: number
+  /**
+   * Summed per-package totals — the denominator of the dashboard's overall
+   * bar. The upstream's `TotalDosage` floor is applied host-side when larger.
+   * Absent from older host documents: the dashboard falls back to the
+   * package sum and renders the overall bar as indeterminate when the sum
+   * is 0.
+   */
+  totalSize?: number
   accounts: readonly WorkBuddyWebCreditAccount[]
   unlimited?: true
   cycleResetTime?: string

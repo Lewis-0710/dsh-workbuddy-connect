@@ -108,11 +108,29 @@ export interface WorkBuddyCreditAccount {
   remain: number
   size: number
   unlimited?: true
+  /**
+   * When this package's credit expires, verbatim from the upstream
+   * `PackageEndTime` field (`"YYYY-MM-DD HH:mm:ss"`, a UTC+8 wall-clock
+   * string; the field name is corroborated by the request body's own
+   * `PackageEndTimeRange*` filters and by workbuddy2api's parser). An absent
+   * value means the upstream reported no expiry for this package — rendered
+   * as "no expiry", never guessed into a date.
+   */
+  packageEndTime?: string
 }
 
 /** Aggregated credit answer for one credential. */
 export interface WorkBuddyCredits {
   total: number
+  /**
+   * The summed per-package totals (size), i.e. the account's total granted
+   * credit this cycle — the denominator for the dashboard's overall bar.
+   * The upstream's own `TotalDosage` acts as a FLOOR when it is larger
+   * (workbuddy2api's `ResourceSummary` ruling: consumed credit cannot exceed
+   * the total dosage), never as a fabricated value when the packages already
+   * sum higher.
+   */
+  totalSize?: number
   accounts: readonly WorkBuddyCreditAccount[]
   /**
    * The account's cycle quota is uncapped (`limitNum === -1` on the CN
@@ -929,6 +947,7 @@ export class WorkBuddyUpstreamClient {
     const rawAccounts = Array.isArray(inner['Accounts']) ? inner['Accounts'] : []
     const accounts: WorkBuddyCreditAccount[] = []
     let total = 0
+    let totalSize = 0
     for (const raw of rawAccounts) {
       if (typeof raw !== 'object' || raw === null) continue
       const account = raw as Record<string, unknown>
@@ -943,13 +962,36 @@ export class WorkBuddyUpstreamClient {
       else remain = capacityRemain
       if (remain < 0) remain = 0
       total += remain
+      totalSize += size > 0 ? size : numberField('CapacitySize')
       accounts.push({
         packageName: typeof account['PackageName'] === 'string' ? account['PackageName'] : '(unnamed)',
         remain,
         size: size > 0 ? size : numberField('CapacitySize'),
+        // Expiry: the upstream serves NO PackageEndTime on this endpoint (the
+        // measured field list has CycleEndTime / ExpiredTime /
+        // DeductionEndTime instead — verified live 2026-09-17). The cycle
+        // cutoff is CycleEndTime; fall back to ExpiredTime for packages that
+        // carry an absolute expiry instead of a cycle one. Absent/empty →
+        // the field is omitted, never guessed into a date.
+        ...((): { packageEndTime?: string } => {
+          for (const key of ['CycleEndTime', 'ExpiredTime'] as const) {
+            const value = account[key]
+            if (typeof value === 'string' && value !== '') return { packageEndTime: value }
+            if (typeof value === 'number' && value > 0) {
+              // Numeric forms are epoch milliseconds (measured upstream shape).
+              return { packageEndTime: new Date(value).toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai' }).replace('T', ' ') }
+            }
+          }
+          return {}
+        })(),
       })
     }
-    return { total, accounts }
+    // TotalDosage as a FLOOR for the summed size (workbuddy2api's
+    // ResourceSummary ruling): consumed credit cannot exceed the total
+    // dosage, so an upstream-reported dosage above the package sum wins.
+    const dosage = typeof inner['TotalDosage'] === 'number' ? inner['TotalDosage'] as number : 0
+    if (dosage > totalSize) totalSize = dosage
+    return { total, accounts, ...(totalSize > 0 ? { totalSize } : {}) }
   }
 
   /**
