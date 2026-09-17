@@ -219,15 +219,15 @@ export function SidebarQuotaCard(props: SidebarQuotaCardProps): React.ReactNode 
   const enabled = variantId === 'workbuddy' ? quotaToggles().cn : quotaToggles().ai
   const status = quotaStatus(variantId)
 
-  // One-shot fetch on mount/enable: seeds the store with a fresh document.
-  // The card does NOT run its own interval any more — the dashboard's poll
-  // (while open) and the other card's fetch share this store, and this card
-  // re-fetches on visibility regain so a long-idle page catches up. The
-  // freshness rule lives on the PANEL's display path only: this card always
-  // seeds once (one request per page load per variant, no interval loop).
+  // Poll on the configured interval for as long as the card is enabled —
+  // the user's design: the SIDEBAR card keeps itself current on the setting's
+  // cadence (the freshness/cache rule lives on the panel's display path
+  // only). Skips ticks while the document is hidden, and re-fetches when
+  // visibility returns so a long-idle page catches up.
   useEffect(() => {
     if (statusPath === undefined || !enabled) return undefined
     let disposed = false
+    let timer: number | undefined
     const controller = new AbortController()
     const refresh = async (): Promise<void> => {
       try {
@@ -244,14 +244,20 @@ export function SidebarQuotaCard(props: SidebarQuotaCardProps): React.ReactNode 
         if (!disposed) setFailed(true)
       }
     }
+    const loop = (): void => {
+      if (document.hidden) return
+      void refresh()
+    }
+    timer = window.setInterval(loop, Math.max(60_000, quotaPollMs()))
     void refresh()
     const onVisible = (): void => {
-      if (!document.hidden) void refresh()
+      if (!document.hidden) loop()
     }
     document.addEventListener('visibilitychange', onVisible)
     return () => {
       disposed = true
       controller.abort()
+      if (timer !== undefined) window.clearInterval(timer)
       document.removeEventListener('visibilitychange', onVisible)
     }
   }, [statusPath, enabled, variantId])
