@@ -368,6 +368,8 @@ export interface QuotaDashboardInjected {
   statusPaths: readonly string[]
   refresh: () => void
   close: () => void
+  /** Fetch the variant the user just picked (see {@link QuotaDashboardProps.onVariantPicked}). */
+  onVariantPicked: (path: string) => void
 }
 
 /** Props the dashboard panel receives through its inject face. */
@@ -389,6 +391,13 @@ export interface QuotaDashboardProps {
   statusPaths: readonly string[]
   refresh: () => void
   close: () => void
+  /**
+   * The user picked a different variant's tab: the panel must fetch THAT
+   * variant when the shared store holds nothing (or something stale) for it.
+   * Its sidebar card may be off, so no other surface ever fetched it — without
+   * this the tab showed "sign in" until the user toggled a setting.
+   */
+  onVariantPicked: (path: string) => void
   /**
    * The dashboard's live state, delivered as a selector hook over an
    * observable source — the commandcode `hooks` mechanism. The renderer
@@ -413,7 +422,7 @@ export interface QuotaDashboardProps {
  * run yet. The tab defaults to the variant whose card was clicked.
  */
 export function QuotaDashboard(props: QuotaDashboardProps): React.ReactNode {
-  const { t = fallbackT, statusPaths, refresh, close, useQuotaDashboard } = props
+  const { t = fallbackT, statusPaths, refresh, close, useQuotaDashboard, onVariantPicked } = props
   // The dashboard rides the SAME shared store as the sidebar cards: the
   // hooks-channel snapshot carries only the followed tab; documents come from
   // the shared revision subscription, so a refresh updates both surfaces at
@@ -470,7 +479,13 @@ export function QuotaDashboard(props: QuotaDashboardProps): React.ReactNode {
                   role="tab"
                   aria-selected={path === activePathResolved}
                   className={path === activePathResolved ? 'wbp-tab wbp-tabActive' : 'wbp-tab'}
-                  onClick={() => setUserPicked(path)}
+                  onClick={() => {
+                    setUserPicked(path)
+                    // Fetch the newly shown variant when the shared store has
+                    // nothing (or something stale) for it — its sidebar card
+                    // being off means no other surface ever fetched it.
+                    onVariantPicked(path)
+                  }}
                 >
                   {t(key)}
                 </button>

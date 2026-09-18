@@ -311,6 +311,16 @@ export function apply(ctx: ClientContext): void {
         // bypasses the freshness rule and re-reads the SHOWN variant only.
         void refreshDashboard({ force: true })
       },
+      // The user switched to another variant's tab: point the dashboard at it
+      // and fetch that variant when the shared store holds nothing for it (or
+      // something stale). Its sidebar card being off means no other surface
+      // ever fetched it, so without this the tab showed "sign in" until the
+      // user toggled a setting.
+      onVariantPicked: (path: string) => {
+        dashboardRequestedPath = path
+        notifyDashboard()
+        void refreshDashboard()
+      },
       close: () => {
         const layout = ctx.get('layout') as LayoutSelectionSeam | undefined
         if (typeof layout?.selectPanel !== 'function') return
@@ -362,8 +372,14 @@ export function apply(ctx: ClientContext): void {
               dashboardRequestedPath = statusPath
               // An already-mounted panel will not re-render from selectPanel
               // (the panel key is unchanged), so push the tab change through
-              // the revision the dashboard subscribes to.
+              // the revision the dashboard subscribes to. The variant switch
+              // must also FETCH the newly shown variant when the shared store
+              // holds nothing (or something stale) for it — without this,
+              // opening the panel on one variant and switching to the other
+              // showed "sign in" forever for a variant no surface had ever
+              // fetched (its sidebar card being off means nobody polls it).
               notifyDashboard()
+              void refreshDashboard()
               current.selectPanel(QUOTA_PANEL_ID)
             },
           }
