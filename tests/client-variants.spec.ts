@@ -47,13 +47,28 @@ describe('card variants', () => {
   })
 
   it('has copy for both products in both languages', () => {
+    /**
+     * The word each locale uses to say which edition a title belongs to.
+     *
+     * The international product is "AI" in English and 「国际版」 in Chinese:
+     * 12421ee moved the Chinese copy off the bare "AI" spelling, so one
+     * hardcoded substring could no longer name both — checking zh for "AI"
+     * asserted the removed copy and failed on the shipped 「国际版」. Asking
+     * each language in its own words still proves the two titles differ,
+     * which is what this check is for.
+     */
+    const edition: Record<string, { en: string; zh: string }> = {
+      workbuddy: { en: 'WorkBuddy', zh: '国内' },
+      'workbuddy-ai': { en: 'AI', zh: '国际' },
+    }
     for (const card of CARD_VARIANTS) {
       expect(zh[card.titleKey]).toBeTruthy()
       expect(zh[card.introKey]).toBeTruthy()
       expect(zh[card.signedOutKey]).toBeTruthy()
-      // The two titles must actually differ in each language, not just be
-      // distinct keys with identical text.
-      expect(zh[card.titleKey]).toContain(card.id === 'workbuddy-ai' ? 'AI' : 'WorkBuddy')
+      const marker = edition[card.id]
+      expect(marker).toBeDefined()
+      expect(en[card.titleKey]).toContain(marker!.en)
+      expect(zh[card.titleKey]).toContain(marker!.zh)
     }
     expect(zh.titleAI).not.toBe(zh.title)
     expect(en.titleAI).not.toBe(en.title)

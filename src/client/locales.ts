@@ -5,6 +5,12 @@ export const en = {
   intro: 'Use the models in the WorkBuddy desktop app directly in DSH — zero configuration, ready out of the box.',
   titleAI: 'WorkBuddy AI',
   introAI: 'Use the models in the WorkBuddy AI international desktop app directly in DSH — zero configuration, ready out of the box.',
+  /** The single unified card's title: it owns both variants and the quota settings. */
+  unifiedTitle: 'WorkBuddy',
+  unifiedIntro: 'Manage WorkBuddy (China) and WorkBuddy AI (international) models, credentials, and sidebar quota displays.',
+  /** The segmented switcher's two halves. */
+  variantTabCN: 'China',
+  variantTabAI: 'International',
   expand: 'Expand',
   collapse: 'Collapse',
   loading: 'Loading account…',
@@ -144,6 +150,10 @@ export const zh: Record<WorkBuddySettingsKey, string> = {
   intro: '登录 WorkBuddy 国内版后，在侧栏底部查看剩余积分，并直接使用它的模型。',
   titleAI: 'WorkBuddy（国际版）',
   introAI: '登录 WorkBuddy AI 国际版后，在侧栏底部查看剩余积分，并直接使用它的模型。',
+  unifiedTitle: 'WorkBuddy',
+  unifiedIntro: '统一管理 WorkBuddy（国内版）与 WorkBuddy AI（国际版）模型、凭证及侧栏额度展示。',
+  variantTabCN: '国内版',
+  variantTabAI: '国际版',
   expand: '展开',
   collapse: '收起',
   loading: '正在读取账号…',

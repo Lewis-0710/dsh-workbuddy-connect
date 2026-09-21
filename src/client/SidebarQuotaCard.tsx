@@ -218,6 +218,12 @@ export function SidebarQuotaCard(props: SidebarQuotaCardProps): React.ReactNode 
   useSyncExternalStore(onQuotaSettingsChange, quotaSettingsRevision)
   const enabled = variantId === 'workbuddy' ? quotaToggles().cn : quotaToggles().ai
   const status = quotaStatus(variantId)
+  // Defense in depth: the card should only ever be enabled while its variant
+  // is signed in (the settings write is gated on that), but a stored toggle
+  // can outlive the session — sign out, and the setting never rewrote itself.
+  // So the open action is gated HERE too: a signed-out card shows its state but
+  // clicking it opens nothing.
+  const signedIn = status?.status === 'signed-in'
 
   // Poll on the configured interval for as long as the card is enabled —
   // the user's design: the SIDEBAR card keeps itself current on the setting's
@@ -244,21 +250,26 @@ export function SidebarQuotaCard(props: SidebarQuotaCardProps): React.ReactNode 
         if (!disposed) setFailed(true)
       }
     }
+    const isHidden = (): boolean => typeof document !== 'undefined' && document.hidden
     const loop = (): void => {
-      if (document.hidden) return
+      if (isHidden()) return
       void refresh()
     }
     timer = window.setInterval(loop, Math.max(60_000, quotaPollMs()))
     void refresh()
     const onVisible = (): void => {
-      if (!document.hidden) loop()
+      if (!isHidden()) loop()
     }
-    document.addEventListener('visibilitychange', onVisible)
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisible)
+    }
     return () => {
       disposed = true
       controller.abort()
       if (timer !== undefined) window.clearInterval(timer)
-      document.removeEventListener('visibilitychange', onVisible)
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisible)
+      }
     }
   }, [statusPath, enabled, variantId])
 
@@ -291,7 +302,11 @@ export function SidebarQuotaCard(props: SidebarQuotaCardProps): React.ReactNode 
         className="wbp-railButton"
         aria-label={title}
         title={title}
-        onClick={() => open?.()}
+        disabled={!signedIn}
+        onClick={() => {
+          if (!signedIn) return
+          open?.()
+        }}
       >
         <Ring percent={ringPercent} warn={ringWarn} size={18} />
       </button>
@@ -304,7 +319,11 @@ export function SidebarQuotaCard(props: SidebarQuotaCardProps): React.ReactNode 
       className="wbp-foot"
       aria-label={title}
       title={title}
-      onClick={() => open?.()}
+      disabled={!signedIn}
+      onClick={() => {
+        if (!signedIn) return
+        open?.()
+      }}
     >
       <span className="wbp-footTop">
         <Ring percent={ringPercent} warn={ringWarn} size={16} />

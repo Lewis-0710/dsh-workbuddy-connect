@@ -10,10 +10,9 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-model-selection/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import { WorkBuddyProbeControl } from './WorkBuddyProbeControl.tsx'
-import { AI_CARD_VARIANT, CARD_VARIANTS, CN_CARD_VARIANT, WorkBuddyPluginCard } from './WorkBuddyPluginCard.tsx'
+import { CARD_VARIANTS, WorkBuddyPluginCard } from './WorkBuddyPluginCard.tsx'
 import type { WorkBuddyPluginCardInjected } from './WorkBuddyPluginCard.tsx'
-import { QuotaSettingsCard } from './QuotaSettingsCard.tsx'
-import type { QuotaSection, QuotaSettingsCardInjected } from './QuotaSettingsCard.tsx'
+import type { QuotaSection } from './QuotaSettingsCard.tsx'
 import { QuotaDashboard, SidebarQuotaCard } from './SidebarQuotaCard.tsx'
 import type { QuotaDashboardInjected, QuotaDashboardState, QuotaDashboardProps, QuotaCopyKey, SidebarQuotaCardInjected, SidebarQuotaCardProps } from './SidebarQuotaCard.tsx'
 import { injectQuotaCss } from './quota-styles.ts'
@@ -64,25 +63,24 @@ const VARIANT_STATUS: Record<string, string> = {
 }
 
 /**
- * Register card copy, the shared quota-settings card, the two variant cards,
- * and the sidebar quota cards.
+ * Register card copy, the unified WorkBuddy card, and the sidebar quota cards.
  *
  * The entire body is wrapped so that a DSH slot-API breaking change (for
- * example the rc.6鈫抮c.7 `id`鈫抈key` / `order`鈫抈priority` rename) degrades
+ * example the rc.6 to rc.7 `id` to `key` / `order` to `priority` rename) degrades
  * to a `console.error` instead of throwing into the DSH loader and raising
  * the red "Failed to load plugins" banner. The host provider keeps working:
  * the `workbuddy` model channel is unaffected, and `dsh-workbuddy-connect
  * status` reports host health via the heartbeat file.
  *
  * Card ORDER: the Plugins tab dispatches `settings.plugin.item` in
- * registration order, so this entry registers the shared quota-settings card
- * first (top), then CN, then AI 鈥?the layout agreed for this feature
- * (缁熶竴璁剧疆 鈫?CN 鈫?AI, with the previous AI-over-CN order swapped).
+ * priority-ascending order, so the unified card keeps the seat the shared
+ * quota-settings card held (10) and takes the place of the two variant cards
+ * that used to follow it: WorkBuddy (10), then the sibling plugins' bands.
  *
  * NOTE: the try/catch boundary of this function is mirrored (duplicated) in
  * `tests/client-fallback.spec.ts`, because the real client entry imports
  * browser-only DSH packages that cannot load in the Node test environment.
- * That test therefore does not import this function 鈥?it replicates its
+ * That test therefore does not import this function; it replicates its
  * shape. If you change the guarded body or the `console.error` message here,
  * update the mirrored `apply()` in that spec too, or the fallback test will
  * silently diverge from this real implementation.
@@ -93,15 +91,10 @@ export function apply(ctx: ClientContext): void {
     ctx.effect(() => ctx.locale.register(namespace, { zh, en }), 'dsh-workbuddy-connect: settings copy')
     const t = ctx.locale.bind(namespace) as WorkBuddyPluginCardInjected['t']
 
-    // 1. Shared quota-settings card. Card ORDER is priority-ascending in the
-    // Plugins tab (measured: lower priority renders first), so this card gets
-    // the LOWEST priority number to sit above the two variant cards:
-    // 统一设置 (10) → CN (20) → AI (30).
-    const quotaSettingsInjected: QuotaSettingsCardInjected = {
-      t,
-      // Read live at render: the sign-in state changes without a remount.
-      signedIn: () => quotaSignInState(),
-    }
+    // 1. The shared quota-settings values. The card that EDITS them is no
+    // longer registered separately — it now lives inside the unified
+    // WorkBuddy card below (see `unified: true`), which keeps one owner for
+    // the sign-in gate instead of two cards that could disagree.
     // Bind the quota namespace AT BOOT, not when the settings card's inject
     // factory first runs: the factory only executes while the settings page
     // renders, so a fresh page load read no toggles and rendered no sidebar
@@ -126,23 +119,25 @@ export function apply(ctx: ClientContext): void {
     } catch (error: unknown) {
       console.error('[dsh-workbuddy-connect] quota settings scope unavailable (sidebar cards stay hidden):', error)
     }
+
+    // 2. ONE unified card: the sidebar quota settings at the top, then a
+    // segmented tab per variant (国内版 / 国际版). It keeps the seat the
+    // quota-settings card held — the Plugins tab dispatches
+    // `settings.plugin.item` in priority-ascending order (measured: lower
+    // priority renders first), so 10 puts WorkBuddy ahead of the sibling
+    // connect plugins' bands.
     ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
       name: 'settings.plugin.item',
-      key: 'workbuddy-quota',
+      key: 'workbuddy',
       priority: 10,
-      inject: (): QuotaSettingsCardInjected => ({ ...quotaSettingsInjected, scope: quotaScope }),
-    }, QuotaSettingsCard))
-
-    // 2 + 3. One card per variant. Priorities place CN above AI (both below
-    // the quota-settings card's 10).
-    for (const [index, variant] of [CN_CARD_VARIANT, AI_CARD_VARIANT].entries()) {
-      ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
-        name: 'settings.plugin.item',
-        key: variant.id,
-        priority: 20 + index * 10,
-        inject: (): WorkBuddyPluginCardInjected => ({ t, variant }),
-      }, WorkBuddyPluginCard))
-    }
+      inject: (): WorkBuddyPluginCardInjected => ({
+        t,
+        scope: quotaScope,
+        // Read live at render: the sign-in state changes without a remount.
+        signedIn: () => quotaSignInState(),
+        unified: true,
+      }),
+    }, WorkBuddyPluginCard))
 
     // Sidebar quota cards + the dashboard they open. Two registrations, one
     // navigation entry — commandcode's pattern: the layout's keyed `main` slot

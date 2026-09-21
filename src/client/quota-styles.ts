@@ -51,6 +51,13 @@ export const QUOTA_CSS = `
 .wbp-foot{box-sizing:border-box;flex:0 0 auto;width:100%;min-width:0;font:inherit;color:var(--dsw-alias-label-secondary);text-align:left;cursor:pointer;background:0 0;border:1px solid transparent;border-radius:10px;flex-direction:column;gap:6px;margin:0 0 4px;padding:8px;display:flex}
 .wbp-foot:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l2)}
 .wbp-foot:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
+/* A signed-out variant's card is inert (the click is blocked at the handler):
+   it must not invite the click it will ignore, so it drops the pointer cursor
+   and the hover tint — the same disabled look the settings switches use. */
+.wbp-foot:disabled{opacity:.5;cursor:default}
+.wbp-foot:disabled:hover{color:var(--dsw-alias-label-secondary);background:0 0;border-color:transparent}
+.wbp-railButton:disabled{opacity:.5;cursor:default}
+.wbp-railButton:disabled:hover{color:var(--dsw-alias-label-secondary);background:0 0}
 .wbp-footTop{align-items:center;gap:8px;min-width:0;display:flex}
 .wbp-footName{white-space:nowrap;text-overflow:ellipsis;color:var(--dsw-alias-label-primary);min-width:0;overflow:hidden;font-size:13px;font-weight:500;line-height:20px}
 .wbp-updated{flex:none;color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:14px;font-variant-numeric:tabular-nums;white-space:nowrap}

@@ -16,22 +16,29 @@
  * would render an error forever, so the setting waits for a session.
  */
 
-import { useSyncExternalStore, useState, useEffect } from 'react'
+import { useSyncExternalStore, useState, useEffect, useCallback } from 'react'
 import type { CSSProperties } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import type { WorkBuddySettingsKey } from './locales.ts'
 import { isWorkBuddyWebStatus } from './status-document.ts'
-import { noteQuotaSignIn, variantOfStatusPath } from './quota-settings-store.ts'
+import { noteQuotaSignIn, onQuotaSettingsChange, quotaSignInState, quotaStatus, variantOfStatusPath } from './quota-settings-store.ts'
 import { WORKBUDDY_AI_STATUS_PATH, WORKBUDDY_STATUS_PATH } from '../status-paths.ts'
 
 /** Everything the registration binds into the card. */
 export interface QuotaSettingsCardInjected {
   /** Translator bound to the settings namespace. */
   t: (key: WorkBuddySettingsKey, params?: Record<string, unknown>) => string
-  /** Sign-in state per variant; a toggle is disabled when its variant is out. */
-  signedIn: () => { cn: boolean; ai: boolean }
+  /**
+   * Sign-in state per variant; a toggle is disabled when its variant is out.
+   *
+   * Optional: the unified card owns the store subscription itself and passes
+   * this only when it has a state to report. When absent, the content derives
+   * sign-in from the shared store and its own probe — never from a default
+   * that would claim the user is signed in.
+   */
+  signedIn?: (() => { cn: boolean; ai: boolean }) | undefined
   /** The bound scope over the `workbuddy-quota` namespace, when available. */
   scope?: SettingsScope<QuotaSection> | undefined
 }
@@ -88,12 +95,12 @@ function project(scope: SettingsScope<QuotaSection> | undefined): QuotaSettingsP
  * reference between renders unless the store actually changed. project()
  * builds a fresh object every call, which re-renders forever and crashes the
  * card with React error #185 ("maximum update depth exceeded") — exactly the
- * crash the slot ledger reported. The cache below returns the last built
- * projection until the underlying scope snapshot (or scope identity) changes,
- * which is the only thing the projection actually derives from.
+ * crash the slot ledger reported. The cache below compares the projection
+ * FIELD BY FIELD and keeps the previous object unless a value actually moved,
+ * so a scope handed a fresh-but-equal snapshot object every read (which a test
+ * double does, and a normalizing host may too) cannot spin the card.
  */
 let cachedScope: SettingsScope<QuotaSection> | undefined
-let cachedSource: unknown
 let cachedProjection: QuotaSettingsProjection | undefined
 const UNAVAILABLE: QuotaSettingsProjection = {
   status: 'unavailable',
@@ -103,11 +110,18 @@ const UNAVAILABLE: QuotaSettingsProjection = {
 
 function stableProject(scope: SettingsScope<QuotaSection> | undefined): QuotaSettingsProjection {
   if (scope === undefined) return UNAVAILABLE
-  const source = scope.getSnapshot()
-  if (scope !== cachedScope || source !== cachedSource || cachedProjection === undefined) {
+  const next = project(scope)
+  if (
+    cachedProjection === undefined ||
+    cachedScope !== scope ||
+    cachedProjection.status !== next.status ||
+    cachedProjection.writable !== next.writable ||
+    cachedProjection.values.sidebarQuotaCN !== next.values.sidebarQuotaCN ||
+    cachedProjection.values.sidebarQuotaAI !== next.values.sidebarQuotaAI ||
+    cachedProjection.values.quotaPollMs !== next.values.quotaPollMs
+  ) {
     cachedScope = scope
-    cachedSource = source
-    cachedProjection = project(scope)
+    cachedProjection = next
   }
   return cachedProjection
 }
@@ -133,7 +147,14 @@ function ToggleRow({ label, hint, checked, disabled, disabledHint, onToggle }: {
         aria-checked={checked}
         disabled={disabled}
         aria-label={label}
-        onClick={() => onToggle(!checked)}
+        onClick={() => {
+          // Defense in depth: a disabled switch must never reach the write, even
+          // when a caller invokes the handler directly (an older browser, or a
+          // test driving props.onClick). The gate lives in the handler, not only
+          // in the `disabled` attribute.
+          if (disabled) return
+          onToggle(!checked)
+        }}
         style={{
           ...switchStyle,
           background: checked ? 'var(--dsw-alias-brand-primary)' : 'var(--dsw-alias-bg-layer-3, rgba(127,127,127,0.2))',
@@ -148,23 +169,25 @@ function ToggleRow({ label, hint, checked, disabled, disabledHint, onToggle }: {
   )
 }
 
-/** The shared quota-settings card. */
-export function QuotaSettingsCard(props: QuotaSettingsCardProps): React.ReactNode {
-  const { t = key => key, scope, signedIn } = props
-  const projection = useSyncExternalStore(
-    scope?.subscribe.bind(scope) ?? (listener => listener),
-    () => stableProject(scope),
-  )
-  // Collapsed by default — matching the two variant cards' disclosure shape —
-  // with the header as the toggle. Open state stays local: it is a view
-  // preference, not a setting worth persisting.
-  const [open, setOpen] = useState(false)
-  const [hovered, setHovered] = useState(false)
-  const [headerFocused, setHeaderFocused] = useState(false)
+/**
+ * The quota-settings controls on their own, with no card chrome.
+ *
+ * This is the half the unified WorkBuddy card embeds at the top of its body.
+ * It owns its subscriptions: the scope projection (which values are saved) and
+ * the shared sign-in store (which variant has a session), so a toggle
+ * re-gates the moment a poll anywhere lands a document — no remount, and no
+ * prop-drilling through the slot injection.
+ */
+export function QuotaSettingsContent({ t = key => key, scope, signedIn }: QuotaSettingsCardInjected): React.ReactNode {
+  const subscribe = useCallback((onStoreChange: () => void) => {
+    return scope?.subscribe(onStoreChange) ?? (() => {})
+  }, [scope])
+  const projection = useSyncExternalStore(subscribe, () => stableProject(scope))
+  const liveSignIn = useSyncExternalStore(onQuotaSettingsChange, quotaSignInState)
   // The toggles gate on sign-in, but the sidebar cards' polls do not run while
-  // both are OFF — so the card probes both status routes itself (one shot per
-  // open, plus one at mount). This is the same document the variant cards
-  // render; no credentials ever reach the browser.
+  // both are OFF — so this content probes both status routes itself, once at
+  // mount. It is the same document the variant cards render; no credential ever
+  // reaches the browser.
   const [probe, setProbe] = useState<{ cn: boolean; ai: boolean }>()
   useEffect(() => {
     let disposed = false
@@ -186,20 +209,108 @@ export function QuotaSettingsCard(props: QuotaSettingsCardProps): React.ReactNod
     return () => {
       disposed = true
     }
-  }, [open])
+  }, [])
 
   if (projection.status === 'unavailable') return null
-  const reported = signedIn?.() ?? { cn: false, ai: false }
-  // The probe result wins when it has landed (fresher); the shared store's
-  // view covers the window before the probe returns.
+  const reported = signedIn?.()
+
+  /**
+   * Whether one variant has a usable session, decided by whoever can best tell.
+   *
+   * An explicit `signedIn` reader (what the unified card passes once it has a
+   * poll's answer) is authoritative. Otherwise — and that is the case this
+   * exists for — a stale optimistic `true` in the store must never be enough:
+   * the shared store may hold a sign-in fact from a document that has since
+   * been replaced by a signed-out one. So the CURRENT document is consulted,
+   * and a document saying `signed-out` closes the toggle regardless of what
+   * any cached flag says.
+   */
+  const deriveSigned = (variant: 'cn' | 'ai', variantId: 'workbuddy' | 'workbuddy-ai'): boolean => {
+    if (reported !== undefined) return Boolean(reported[variant])
+    const currentStatus = quotaStatus(variantId)
+    if (currentStatus?.status === 'signed-out') return false
+    const live = liveSignIn[variant]
+    if (probe !== undefined) {
+      const probeResult = probe[variant]
+      if (!probeResult) return Boolean(live && currentStatus?.status === 'signed-in')
+      return Boolean(live)
+    }
+    return Boolean(live && currentStatus?.status === 'signed-in')
+  }
+
   const signed = {
-    cn: probe?.cn ?? reported.cn,
-    ai: probe?.ai ?? reported.ai,
+    cn: deriveSigned('cn', 'workbuddy'),
+    ai: deriveSigned('ai', 'workbuddy-ai'),
   }
   const write = (field: Field, value: boolean | number): void => {
+    // Defense in depth against enabling the sidebar card of an account nobody
+    // is signed into: the switch already reads `disabled`, and its handler
+    // already returns early — this is the third gate, at the write itself, so
+    // no call path (including a direct onToggle(true)) can persist it.
+    if (field === 'sidebarQuotaCN' && value === true && !signed.cn) return
+    if (field === 'sidebarQuotaAI' && value === true && !signed.ai) return
     void scope?.set(field, value)
   }
   const minutes = Math.max(POLL_MIN_MS / 60_000, Math.round(projection.values.quotaPollMs / 60_000))
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <ToggleRow
+        label={t('quotaToggleCN')}
+        hint={t('quotaToggleHint')}
+        checked={projection.values.sidebarQuotaCN}
+        disabled={!signed.cn}
+        disabledHint={t('quotaSignInRequired')}
+        onToggle={next => write('sidebarQuotaCN', next)}
+      />
+      <ToggleRow
+        label={t('quotaToggleAI')}
+        hint={t('quotaToggleHint')}
+        checked={projection.values.sidebarQuotaAI}
+        disabled={!signed.ai}
+        disabledHint={t('quotaSignInRequired')}
+        onToggle={next => write('sidebarQuotaAI', next)}
+      />
+      <div style={{ ...rowStyle, borderBottom: 'none', paddingBottom: 0 }}>
+        <div style={rowTextStyle}>
+          <span style={labelStyle}>{t('quotaPollLabel')}</span>
+          <span style={hintStyle}>{t('quotaPollHint')}</span>
+        </div>
+        <span style={pollFieldStyle}>
+          <input
+            type="number"
+            min={POLL_MIN_MS / 60_000}
+            step={1}
+            value={minutes}
+            aria-label={t('quotaPollLabel')}
+            onChange={event => {
+              const mins = Number.parseInt(event.target.value, 10)
+              if (Number.isFinite(mins) && mins > 0) write('quotaPollMs', Math.max(POLL_MIN_MS, mins * 60_000))
+            }}
+            style={inputStyle}
+          />
+          <span style={hintStyle}>{t('quotaPollUnit')}</span>
+        </span>
+      </div>
+      {projection.writable === false ? <span style={hintStyle}>{t('quotaSettingsSaveFailed')}</span> : null}
+    </div>
+  )
+}
+
+/** The standalone shared quota-settings card (kept for a non-unified host). */
+export function QuotaSettingsCard(props: QuotaSettingsCardProps): React.ReactNode {
+  const { t = key => key, scope, signedIn } = props
+  const subscribe = useCallback((onStoreChange: () => void) => {
+    return scope?.subscribe(onStoreChange) ?? (() => {})
+  }, [scope])
+  const projection = useSyncExternalStore(subscribe, () => stableProject(scope))
+  // Collapsed by default — matching the variant card's disclosure shape — with
+  // the header as the toggle. Open state stays local: it is a view preference,
+  // not a setting worth persisting.
+  const [open, setOpen] = useState(false)
+  const [hovered, setHovered] = useState(false)
+  const [headerFocused, setHeaderFocused] = useState(false)
+
+  if (projection.status === 'unavailable') return null
   return (
     // The Plugins tab renders its card list as <ul><li>: the variant cards are
     // <li>s, and the measured DOM showed this card's <section> sitting in the
@@ -240,44 +351,7 @@ export function QuotaSettingsCard(props: QuotaSettingsCardProps): React.ReactNod
       </button>
       {open ? (
         <div style={cardBodyStyle}>
-          <ToggleRow
-            label={t('quotaToggleCN')}
-            hint={t('quotaToggleHint')}
-            checked={projection.values.sidebarQuotaCN}
-            disabled={!signed.cn}
-            disabledHint={t('quotaSignInRequired')}
-            onToggle={next => write('sidebarQuotaCN', next)}
-          />
-          <ToggleRow
-            label={t('quotaToggleAI')}
-            hint={t('quotaToggleHint')}
-            checked={projection.values.sidebarQuotaAI}
-            disabled={!signed.ai}
-            disabledHint={t('quotaSignInRequired')}
-            onToggle={next => write('sidebarQuotaAI', next)}
-          />
-          <div style={{ ...rowStyle, borderBottom: 'none', paddingBottom: 0 }}>
-            <div style={rowTextStyle}>
-              <span style={labelStyle}>{t('quotaPollLabel')}</span>
-              <span style={hintStyle}>{t('quotaPollHint')}</span>
-            </div>
-            <span style={pollFieldStyle}>
-              <input
-                type="number"
-                min={POLL_MIN_MS / 60_000}
-                step={1}
-                value={minutes}
-                aria-label={t('quotaPollLabel')}
-                onChange={event => {
-                  const mins = Number.parseInt(event.target.value, 10)
-                  if (Number.isFinite(mins) && mins > 0) write('quotaPollMs', Math.max(POLL_MIN_MS, mins * 60_000))
-                }}
-                style={inputStyle}
-              />
-              <span style={hintStyle}>{t('quotaPollUnit')}</span>
-            </span>
-          </div>
-          {projection.writable === false ? <span style={hintStyle}>{t('quotaSettingsSaveFailed')}</span> : null}
+          <QuotaSettingsContent t={t} scope={scope} signedIn={signedIn} />
         </div>
       ) : null}
     </li>

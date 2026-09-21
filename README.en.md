@@ -14,7 +14,7 @@ Both the CN **WorkBuddy** and the international **WorkBuddy AI** are supported: 
 
 ![WorkBuddy models in the DSH model picker](assets/1.png)
 
-- **CN and international side by side**: the CN product appears as the **WorkBuddy** group and the international one as **WorkBuddy AI**. Their models, accounts, and credit never mix. **Each is signed in on its own**: sign in to just the international one and only WorkBuddy AI appears; sign in to both and both groups appear; sign out of one and that group goes away. Settings likewise shows **one card per version**, each with its own account, balance, and sign-in controls.
+- **CN and international side by side**: the CN product appears as the **WorkBuddy** group and the international one as **WorkBuddy AI**. Their models, accounts, and credit never mix. **Each is signed in on its own**: sign in to just the international one and only WorkBuddy AI appears; sign in to both and both groups appear; sign out of one and that group goes away. Settings shows **one WorkBuddy card** with a **China / International** tab at the top, each tab carrying that version's account, balance, and sign-in controls.
 
 ![WorkBuddy AI models in the DSH model picker](assets/5.png)
 
@@ -22,9 +22,9 @@ Both the CN **WorkBuddy** and the international **WorkBuddy AI** are supported: 
 
 - **Reasoning levels**: levels explicitly declared by WorkBuddy appear directly — for example, GLM-5.3 and GLM-5.3-Flash offer low / high / max. For some models that do not declare selectable levels, Web and Desktop provide a **Reasoning levels** control in the model picker for a manual check. It sends a few requests and may consume credit. Models without a check result or selectable levels continue to use WorkBuddy's default.
 
-- **Status and detection**: Settings → Plugins → the matching card shows the account, token validity, remaining credit, and model offers. It also lets you refresh the model list manually and shows whether the current list came from the upstream or from the built-in fallback, and provides manual reasoning-level detection for eligible models.
+- **Status and detection**: Settings → Plugins → the WorkBuddy card. Pick the version at the top (**China** / **International**), and the card shows that version's account, token validity, remaining credit, and model offers. It also lets you refresh the model list manually and shows whether the current list came from the upstream or from the built-in fallback, and provides manual reasoning-level detection for eligible models.
 
-- **Sidebar credit display ("WorkBuddy sidebar display")**: Settings → Plugins → the topmost "WorkBuddy sidebar display" card turns the sidebar credit card on per version, with a customizable refresh interval (5 minutes by default, 1 minute minimum). When on, a credit card for that version appears at the bottom of the sidebar, next to Settings.
+- **Sidebar credit display**: at the **top of the expanded WorkBuddy card** are the sidebar settings: turn the sidebar credit card on per version, with a customizable refresh interval (5 minutes by default, 1 minute minimum). A version that is not signed in has its switch greyed out until you sign in. When on, a credit card for that version appears at the bottom of the sidebar, next to Settings.
 
 ![WorkBuddy sidebar display settings](assets/8.png)
 
@@ -47,7 +47,7 @@ Both the CN **WorkBuddy** and the international **WorkBuddy AI** are supported: 
 
 ![Settings card showing the plugin](assets/2.png)
 
-The expanded card has three tabs: **Status** shows the account, token validity, total credit, catalog source, and reasoning-level detection; **Context** lists each model's context window (where the international version offers a larger declared window, the "Use the largest declared context window" switch lives here — it is **on by default**, so DSH sizes context compression to the largest window the upstream declares; turn it off to follow the upstream default instead, and the preference persists across restarts); **Details** shows per-package credit and model offers. The CN and international versions each get their own card, showing their own account's information.
+Expanding the card shows the sidebar settings first, then the **China / International** switcher (each segment carries a dot saying whether that version has a session). Below it, the selected version's account and three tabs: **Status** shows the account, token validity, total credit, catalog source, and reasoning-level detection; **Context** lists each model's context window, with the figure and its default on one line (where the international version offers a larger declared window, the "Use the largest declared context window" switch lives here — it is **on by default**, so DSH sizes context compression to the largest window the upstream declares; turn it off to follow the upstream default instead, and the preference persists across restarts); **Details** shows per-package credit and model offers. Switching the top tab moves the whole body to the other version; their accounts, balances, and sign-in states stay separate.
 
 ![Settings card showing account and remaining credit](assets/3.png)
 
@@ -133,7 +133,7 @@ Pin a specific release with a tag, e.g. `github:masknull/dsh-workbuddy-connect#v
 
 > Note: the `dsh-tui` profile requires pnpm 11 to install packages (a different pnpm on PATH fails with `ERR_PNPM_UNEXPECTED_STORE` — use `npx pnpm@11`).
 
-After installing, switch to a WorkBuddy model in the model picker of the interface you chose. On Web and Desktop, the settings card shows the account, token validity, and remaining credit, can refresh the model list manually, and can check eligible models for reasoning levels. **While signed out** it offers **Sign in** (opens the browser and applies the credential when you finish) and **Choose file…** (import an existing `workbuddy.json`); **while signed in** it offers **Switch account** (discards the current credential and starts a fresh sign-in) and **Sign out**. The CN and international versions each have their own card and sign in independently.
+After installing, switch to a WorkBuddy model in the model picker of the interface you chose. On Web and Desktop, the settings card shows the account, token validity, and remaining credit, can refresh the model list manually, and can check eligible models for reasoning levels. **While signed out** it offers **Sign in** (opens the browser and applies the credential when you finish) and **Choose file…** (import an existing `workbuddy.json`); **while signed in** it offers **Switch account** (discards the current credential and starts a fresh sign-in) and **Sign out**. The CN and international versions share one card, switched by its top tab, and sign in independently.
 
 ## CLI
 

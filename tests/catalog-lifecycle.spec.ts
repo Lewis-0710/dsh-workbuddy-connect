@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -10,6 +10,7 @@ import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import * as WorkBuddy from '../src/index.ts'
 import { WorkBuddyCredentialStore } from '../src/auth.ts'
 import { fingerprintModel } from '../src/probe-store.ts'
+import { WORKBUDDY_STATE_DIR_NAME } from '../src/paths.ts'
 import { FALLBACK_WORKBUDDY_MODELS } from '../src/catalog.ts'
 
 /**
@@ -49,6 +50,20 @@ async function tempDir(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'wb-lifecycle-'))
   CLEANUP.push(() => rm(root, { recursive: true, force: true }))
   return root
+}
+
+/**
+ * One rebuildable state file, at the path the plugin actually writes it to.
+ *
+ * All of them live under `<data dir>/state/` (see `workbuddyStateDir`), while
+ * the credential stays at the data-dir root — the layout 12421ee introduced.
+ * A spec that seeds or reads back a state file from the root silently misses
+ * it: the write goes to `state/`, and the read hits nothing.
+ */
+async function stateFile(root: string, filename: string): Promise<string> {
+  const directory = join(root, WORKBUDDY_STATE_DIR_NAME)
+  await mkdir(directory, { recursive: true })
+  return join(directory, filename)
 }
 
 function credentialDocument(domain: string, uid: string): string {
@@ -297,7 +312,7 @@ describe('catalog lifecycle', () => {
       supportsImages: true,
       reasoning: { supports: false, onlyReasoning: false, canDisableThinking: true },
     }
-    await writeFile(join(root, '.workbuddy-probe.json'), JSON.stringify({
+    await writeFile(await stateFile(root, '.workbuddy-probe.json'), JSON.stringify({
       version: 1,
       records: {
         'acct-a-model': {
@@ -511,7 +526,8 @@ describe('identity changes during catalog loading', () => {
     await vi.waitFor(async () => {
       expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['account-b-model'])
     })
-    const saved = JSON.parse(await readFile(join(root, '.workbuddy-catalog.json'), 'utf8')) as { entries: Record<string, unknown> }
+    const savedPath = await stateFile(root, '.workbuddy-catalog.json')
+    const saved = JSON.parse(await readFile(savedPath, 'utf8')) as { entries: Record<string, unknown> }
     expect(saved.entries['uid-a:ent-1']).toBeUndefined()
     expect(saved.entries['uid-b:ent-1']).toBeDefined()
   }, 45_000)

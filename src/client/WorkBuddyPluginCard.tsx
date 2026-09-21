@@ -1,13 +1,25 @@
 /** WorkBuddy status card contributed to Harness Plugin configuration. */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { CSSProperties, ReactElement } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import { WORKBUDDY_AI_LOGIN_PATH, WORKBUDDY_AI_PROBE_PATH, WORKBUDDY_AI_STATUS_PATH, WORKBUDDY_LOGIN_PATH, WORKBUDDY_PROBE_PATH, WORKBUDDY_STATUS_PATH } from '../status-paths.ts'
 import type { WorkBuddyWebModelBadge, WorkBuddyWebProbeSection, WorkBuddyWebStatus } from '../status-paths.ts'
 import { isWorkBuddyWebStatus } from './status-document.ts'
 import type { WorkBuddySettingsKey } from './locales.ts'
+import { QuotaSettingsContent } from './QuotaSettingsCard.tsx'
+import type { QuotaSection } from './QuotaSettingsCard.tsx'
+import {
+  noteQuotaSignIn,
+  noteQuotaStatus,
+  onQuotaSettingsChange,
+  quotaSignInState,
+} from './quota-settings-store.ts'
+
+/** The two variant ids the unified card switches between. */
+type WorkBuddyVariantId = 'workbuddy' | 'workbuddy-ai'
 
 /** Localized copy injected by the browser-plugin registration. */
 export interface WorkBuddyPluginCardInjected {
@@ -15,11 +27,22 @@ export interface WorkBuddyPluginCardInjected {
   /**
    * Which product variant this card instance renders.
    *
-   * Both cards share this component; the variant selects the status/probe
+   * Both cards share this component; the variant selects the status/probe/login
    * routes and the title/intro copy. Defaults to the CN variant so a card
-   * rendered without the injection keeps working.
+   * rendered without the injection keeps working. Ignored in unified mode,
+   * where the reader picks the variant with the segmented tab switcher.
    */
   variant?: WorkBuddyCardVariant
+  /** The bound scope over the `workbuddy-quota` namespace, when available. */
+  scope?: SettingsScope<QuotaSection> | undefined
+  /** Sign-in state per variant; a toggle is disabled when its variant is out. */
+  signedIn?: (() => { cn: boolean; ai: boolean }) | undefined
+  /**
+   * Whether to render as the unified WorkBuddy card: the sidebar quota
+   * settings merged in at the top, then one segmented tab per variant
+   * (国内版 / 国际版) replacing the two separate cards.
+   */
+  unified?: boolean
 }
 
 /** The browser-visible half of a variant: identity, routes, and copy keys. */
@@ -108,7 +131,12 @@ const headerStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 12,
-  border: 0,
+  // Longhands, as on the card itself: the focus ring below is added and
+  // removed by spreading overrides over this object, and clearing the shorthand
+  // `border: 0` the same way lets the native button repaint its own chrome.
+  borderWidth: 0,
+  borderStyle: 'solid',
+  borderColor: 'transparent',
   borderRadius: 12,
   padding: '14px 16px',
   background: 'transparent',
@@ -213,6 +241,14 @@ const contextPreferenceStyle: CSSProperties = {
   lineHeight: 1.5,
 }
 const contextPreferenceCopyStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 2 }
+/** The right-hand cell of one context-window row: value and its note on one line. */
+const contextPickerRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'flex-end',
+  gap: 8,
+  flexWrap: 'wrap',
+}
 /**
  * The promotional badge chip: the theme's soft success tint for the fill and its
  * solid tone for the text. Both tokens exist in the shipped theme — the
@@ -292,13 +328,66 @@ const tabActiveStyle: CSSProperties = {
 const tabPanelStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 18, paddingTop: 16 }
 
 /**
+ * The unified card's variant switcher: a segmented control, not the tab strip
+ * above it.
+ *
+ * It sits at the TOP of the card body and chooses WHICH account the rest of
+ * the card shows, so it reads as a container switcher — an inset track with a
+ * raised active segment — while the strip below stays a flat underline for
+ * switching sections within one account. The tints are the theme's own layer
+ * tokens, so the control matches the settings shell's other segmented picks.
+ */
+const segmentedContainerStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  background: 'var(--dsw-alias-bg-layer-1, rgba(20, 20, 20, 0.6))',
+  borderWidth: '1px',
+  borderStyle: 'solid',
+  borderColor: 'var(--dsw-alias-border-l2, rgba(255, 255, 255, 0.08))',
+  borderRadius: 8,
+  padding: 3,
+  gap: 4,
+  marginTop: 14,
+  marginBottom: 16,
+}
+
+function segmentedTabItemStyle(active: boolean): CSSProperties {
+  return {
+    flex: 1,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    padding: '6px 12px',
+    borderRadius: 6,
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: active ? 'var(--dsw-alias-border-l4, rgba(255, 255, 255, 0.18))' : 'transparent',
+    background: active ? 'var(--dsw-alias-bg-layer-3, rgba(255, 255, 255, 0.08))' : 'transparent',
+    color: active ? 'var(--dsw-alias-label-primary, #fff)' : 'var(--dsw-alias-label-tertiary, #8c8c8c)',
+    fontWeight: active ? 500 : 400,
+    fontSize: 13,
+    lineHeight: '18px',
+    cursor: 'pointer',
+    appearance: 'none',
+    outline: 'none',
+    transition: 'all .16s ease',
+  }
+}
+
+/**
  * Primary action of the inline confirmation. Fill and text colour come from the
  * theme as a pair: `brand-primary` is a light accent here, so pairing it with a
  * hardcoded white would render white-on-white.
  */
 const primaryButtonStyle: CSSProperties = {
   ...buttonStyle,
-  border: '1px solid var(--dsw-alias-button-primary-fill)',
+  // Longhands, never the `border` shorthand: the spread base declares a
+  // shorthand, and overriding only `borderColor` through another shorthand
+  // leaves the native button free to repaint its own chrome.
+  borderWidth: '1px',
+  borderStyle: 'solid',
+  borderColor: 'var(--dsw-alias-button-primary-fill)',
   background: 'var(--dsw-alias-button-primary-fill)',
   color: 'var(--dsw-alias-label-primary-foreground)',
 }
@@ -324,7 +413,7 @@ function dotStyle(status: 'loading' | WorkBuddyWebStatus['status']): CSSProperti
     : status === 'error'
       ? 'var(--dsw-alias-state-error-primary, #d92d20)'
       : 'var(--dsw-alias-label-dimmed, #9aa0a6)'
-  return { width: 9, height: 9, borderRadius: '50%', flex: '0 0 auto', background: color }
+  return { width: 8, height: 8, borderRadius: '50%', flex: '0 0 auto', background: color }
 }
 
 function formatNumber(value: number): string {
@@ -507,8 +596,11 @@ function ContextTable({ models, t, useMaximumContextWindow, disabled, onUseMaxim
         return (
           <div key={model.id} style={quotaLabelStyle}>
             <span>{model.name}</span>
-            <span style={modelOfferStyle}>
-              <span style={{ textAlign: 'right' }}>{formatTokens(capacity)}</span>
+            {/* One line, right-aligned: the window in effect and the note
+                beside it read as one figure, not as two rows competing with
+                the model name across from them. */}
+            <span style={contextPickerRowStyle}>
+              <span>{formatTokens(capacity)}</span>
               {alternative !== undefined
                 ? <span style={modelRateStyle}>{t('contextUpTo', { size: formatTokens(alternative) })}</span>
                 : model.defaultContextWindow !== undefined && model.defaultContextWindow < capacity
@@ -681,8 +773,22 @@ function ProbeSection({ probe, t, onDetect, onClear, busy }: {
 }
 
 /** Render WorkBuddy sign-in state and credit as one expandable card. */
-export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyPluginCardProps) {
+export function WorkBuddyPluginCard(props: WorkBuddyPluginCardProps) {
+  const { t, scope, signedIn, variant, unified } = props
   if (t === undefined) throw new Error('WorkBuddy plugin card requires its translation function')
+
+  const isUnified = unified === true
+  // The shared sign-in store, subscribed rather than read once: a poll landing
+  // anywhere (this card, the other card, a sidebar card, the dashboard) moves
+  // the tab dots and re-gates the embedded quota toggles without a remount.
+  const liveSignIn = useSyncExternalStore(onQuotaSettingsChange, quotaSignInState)
+  const [activeVariantId, setActiveVariantId] = useState<WorkBuddyVariantId>('workbuddy')
+  // In unified mode the reader picks the variant, so the injected one is
+  // ignored; otherwise this is exactly the per-variant card as before.
+  const currentVariant = isUnified
+    ? (activeVariantId === 'workbuddy' ? CN_CARD_VARIANT : AI_CARD_VARIANT)
+    : (variant ?? CN_CARD_VARIANT)
+
   const [open, setOpen] = useState(false)
   /** Whether the pointer is over the card; drives the same border tint the built-in card gets on hover. */
   const [hovered, setHovered] = useState(false)
@@ -705,8 +811,11 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
    *
    * `undefined` therefore means "no successful read yet", which is also the
    * condition that decides whether a failed read has anything to preserve.
+   *
+   * Named `...State` because in unified mode the injected sign-in reader is
+   * `signedIn` — the two are different things and must not shadow each other.
    */
-  const [signedIn, setSignedIn] = useState<boolean>()
+  const [signedInState, setSignedInState] = useState<boolean>()
   /**
    * Why the most recent read failed, when it did. Rendered as a notice beside
    * whatever document is still on screen, rather than replacing it.
@@ -788,7 +897,7 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
     // nothing. A dropped response must not surface as a failure of its own.
     const current = (): boolean => mounted.current && signal?.aborted !== true && seq === readSeq.current
     try {
-      const response = await fetch(variant.statusPath, {
+      const response = await fetch(currentVariant.statusPath, {
         headers: { accept: 'application/json' },
         credentials: 'same-origin',
         ...signal === undefined ? {} : { signal },
@@ -802,8 +911,17 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
       // `error` document (which only a failed read produces, and which the host
       // never sends) says nothing about the account, so it must not stop the
       // interval — that would strand the card on a state it cannot leave.
-      if (value.status === 'signed-in') setSignedIn(true)
-      else if (value.status === 'signed-out') setSignedIn(false)
+      if (value.status === 'signed-in') {
+        setSignedInState(true)
+        // Publish into the SHARED store, so the embedded quota toggles, the
+        // sidebar cards and the dashboard all see this session immediately —
+        // the unified card is often the only surface polling a variant whose
+        // sidebar card is switched off.
+        noteQuotaStatus(currentVariant.id as WorkBuddyVariantId, value)
+      } else if (value.status === 'signed-out') {
+        setSignedInState(false)
+        noteQuotaStatus(currentVariant.id as WorkBuddyVariantId, value)
+      }
       setReadFailure(undefined)
       return true
     } catch (error: unknown) {
@@ -815,27 +933,36 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
       }
       return false
     }
-  }, [t, variant.statusPath])
+  }, [currentVariant.statusPath, currentVariant.id, t])
 
   useEffect(() => {
     if (!open) return
+    // One variant's document is not another's: switching tabs must not show the
+    // account, credits or model list that belonged to the variant just active.
+    // Clear to the honest "not read yet" state and re-read.
+    setStatus(undefined)
+    setSignedInState(undefined)
+    setReadFailure(undefined)
+    setSignIn(undefined)
+    setSignInError(undefined)
+    setImportNotice(undefined)
     const controller = new AbortController()
     void refresh(controller.signal)
     return () => { controller.abort() }
-  }, [open, refresh])
+  }, [open, currentVariant.statusPath, refresh])
 
   useEffect(() => {
     // Gated on the last successful read, never on the rendered document: a
     // failed read must not be able to disarm this effect, or one transient
     // error would leave the card blank until the user clicked Refresh.
-    if (!open || signedIn === false) return
+    if (!open || signedInState === false) return
     const controller = new AbortController()
     const timer = window.setInterval(() => { void refresh(controller.signal) }, POLL_INTERVAL_MS)
     return () => {
       window.clearInterval(timer)
       controller.abort()
     }
-  }, [open, refresh, signedIn])
+  }, [open, refresh, signedInState])
 
   const manualRefresh = async (): Promise<void> => {
     setBusy(true)
@@ -862,7 +989,7 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
     setBusy(true)
     const controller = trackController()
     try {
-      const response = await fetch(variant.probePath, {
+      const response = await fetch(currentVariant.probePath, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Probe-Key': key },
         credentials: 'same-origin',
@@ -894,7 +1021,7 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
       // the write above and `manualRefresh`/`control` abort theirs.
       manualControllers.current.delete(controller)
     }
-  }, [refresh, status, t, trackController, variant.probePath])
+  }, [currentVariant.probePath, refresh, status, t, trackController])
 
   /**
    * Run one control action and refresh the card's state afterwards.
@@ -909,7 +1036,7 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
     setBusy(true)
     const controller = trackController()
     try {
-      const response = await fetch(variant.probePath, {
+      const response = await fetch(currentVariant.probePath, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Probe-Key': key },
         credentials: 'same-origin',
@@ -943,7 +1070,7 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
       manualControllers.current.delete(controller)
       if (mounted.current) setBusy(false)
     }
-  }, [refresh, status, t, trackController, variant.probePath])
+  }, [currentVariant.probePath, refresh, status, t, trackController])
 
   /**
    * Start a detection. Confirmation happens inline in the section, so this is
@@ -968,7 +1095,7 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
     setBusy(true)
     const controller = trackController()
     try {
-      const response = await fetch(variant.loginPath, {
+      const response = await fetch(currentVariant.loginPath, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Login-Key': key },
         credentials: 'same-origin',
@@ -991,7 +1118,7 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
       manualControllers.current.delete(controller)
       if (mounted.current) setBusy(false)
     }
-  }, [t, trackController, variant.loginPath])
+  }, [currentVariant.loginPath, t, trackController])
 
   /** The signed-out card's sign-in button. */
   const beginSignIn = useCallback(async (): Promise<void> => {
@@ -1007,7 +1134,7 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
     setBusy(true)
     const controller = trackController()
     try {
-      const response = await fetch(variant.loginPath, {
+      const response = await fetch(currentVariant.loginPath, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Login-Key': key },
         credentials: 'same-origin',
@@ -1016,6 +1143,16 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
       })
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       setSignIn(undefined)
+      // Defense in depth, published BEFORE the follow-up read: the shared store
+      // still holds the signed-in document (and the sign-in fact) until the
+      // refresh lands, and anything reading it in that window — the embedded
+      // quota toggles, a sidebar card — would see an account that no longer
+      // exists and keep its toggle enabled for it.
+      const signedOutDoc: WorkBuddyWebStatus = { status: 'signed-out', loginKey: key }
+      setStatus(signedOutDoc)
+      setSignedInState(false)
+      noteQuotaStatus(currentVariant.id as WorkBuddyVariantId, signedOutDoc)
+      noteQuotaSignIn(currentVariant.id, false)
       await refresh(controller.signal)
     } catch (error: unknown) {
       if (mounted.current && controller.signal.aborted !== true) {
@@ -1025,7 +1162,7 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
       manualControllers.current.delete(controller)
       if (mounted.current) setBusy(false)
     }
-  }, [refresh, status, t, trackController, variant.loginPath])
+  }, [currentVariant.id, currentVariant.loginPath, refresh, status, t, trackController])
 
   /**
    * Replace the signed-in account: discard the stored credential, then start a
@@ -1048,7 +1185,7 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
     setSignInError(undefined)
     const controller = trackController()
     try {
-      const response = await fetch(variant.loginPath, {
+      const response = await fetch(currentVariant.loginPath, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Login-Key': key },
         credentials: 'same-origin',
@@ -1058,7 +1195,15 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       setSignIn(undefined)
       // Publish the sign-out before opening the next attempt, so the card never
-      // shows the previous account while the browser is being sent to the new one.
+      // shows the previous account while the browser is being sent to the new
+      // one. The shared store is published too: the discarded credential is not
+      // usable by anything else in the meantime, so a quota toggle that gates
+      // on this variant must drop it now, not at the refresh's answer.
+      const signedOutDoc: WorkBuddyWebStatus = { status: 'signed-out', loginKey: key }
+      setStatus(signedOutDoc)
+      setSignedInState(false)
+      noteQuotaStatus(currentVariant.id as WorkBuddyVariantId, signedOutDoc)
+      noteQuotaSignIn(currentVariant.id, false)
       await refresh(controller.signal)
     } catch (error: unknown) {
       if (mounted.current && controller.signal.aborted !== true) {
@@ -1070,7 +1215,7 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
       if (mounted.current) setBusy(false)
     }
     await startAttempt(key)
-  }, [actionKey, refresh, startAttempt, t, trackController, variant.loginPath])
+  }, [actionKey, currentVariant.id, currentVariant.loginPath, refresh, startAttempt, t, trackController])
 
   /**
    * Poll the active attempt until it settles.
@@ -1090,7 +1235,7 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
         const key = actionKey
         if (key === undefined) return
         try {
-          const response = await fetch(variant.loginPath, {
+          const response = await fetch(currentVariant.loginPath, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Login-Key': key },
             credentials: 'same-origin',
@@ -1103,6 +1248,11 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
           if (outcome === 'complete') {
             setSignIn(undefined)
             setSignInError(undefined)
+            // The attempt succeeded: the gate may open as soon as the
+            // refreshed document lands, and in unified mode this card is
+            // frequently the ONLY poller — the embedded quota toggle would
+            // stay disabled until something else happened to fetch.
+            noteQuotaSignIn(currentVariant.id, true)
             await refresh()
             return
           }
@@ -1120,7 +1270,7 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
       cancelled = true
       clearInterval(timer)
     }
-  }, [actionKey, signIn, refresh, t, variant.loginPath])
+  }, [actionKey, currentVariant.id, currentVariant.loginPath, signIn, refresh, t])
 
   /**
    * Adopt a credential file the user picked.
@@ -1138,7 +1288,7 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
     const controller = trackController()
     try {
       const document = await file.text()
-      const response = await fetch(variant.loginPath, {
+      const response = await fetch(currentVariant.loginPath, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Login-Key': key },
         credentials: 'same-origin',
@@ -1153,6 +1303,10 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
           ? record['nickname']
           : typeof record['uid'] === 'string' && record['uid'] !== '' ? record['uid'] : ''
         setImportNotice({ kind: 'done', text: t('importDone', { account: account === '' ? '—' : account }) })
+        // Publish the adopted session before the read settles: the quota
+        // toggles gate on it, and an imported credential is exactly the case
+        // where a toggle flips from disabled to enabled while the user watches.
+        noteQuotaSignIn(currentVariant.id, true)
         await refresh(controller.signal)
         return
       }
@@ -1173,9 +1327,10 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
       manualControllers.current.delete(controller)
       if (mounted.current) setBusy(false)
     }
-  }, [refresh, status, t, trackController, variant.loginPath])
+  }, [currentVariant.id, currentVariant.loginPath, refresh, status, t, trackController])
 
-  const title = t(variant.titleKey)
+  const cardTitle = isUnified ? t('unifiedTitle') : t(currentVariant.titleKey)
+  const cardIntro = isUnified ? t('unifiedIntro') : t(currentVariant.introKey)
   /*
    * `undefined` is "not read yet" and gets its own copy. It is not signed-out:
    * claiming that would be false for a user who is in fact signed in.
@@ -1188,6 +1343,28 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
         ? t('requestFailed')
         : t('signedOut')
 
+  /**
+   * The dot inside each segment of the variant switcher.
+   *
+   * The variant on screen reports what its own read found — including
+   * 'loading' before the first document lands, which is a different fact from
+   * "signed out". The other variant can only be judged by what the shared
+   * store has heard from some other surface.
+   *
+   * An explicit `signedIn` reader is authoritative when present; the store is
+   * the fallback. They are NOT OR'd: an optimistic store `true` surviving a
+   * sign-out would light a dot for an account nobody is in.
+   */
+  const reported = signedIn?.()
+  const cnSignedIn = reported !== undefined ? reported.cn : liveSignIn.cn
+  const aiSignedIn = reported !== undefined ? reported.ai : liveSignIn.ai
+  const cnDotStatus: 'loading' | WorkBuddyWebStatus['status'] = isUnified && activeVariantId === 'workbuddy'
+    ? (status === undefined ? 'loading' : status.status)
+    : (cnSignedIn ? 'signed-in' : 'signed-out')
+  const aiDotStatus: 'loading' | WorkBuddyWebStatus['status'] = isUnified && activeVariantId === 'workbuddy-ai'
+    ? (status === undefined ? 'loading' : status.status)
+    : (aiSignedIn ? 'signed-in' : 'signed-out')
+
   return (
     <li
       style={{ ...cardStyle, ...hovered ? cardHoverStyle : {}, ...open ? cardOpenStyle : {} }}
@@ -1198,7 +1375,7 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
         type="button"
         style={{ ...headerStyle, ...headerFocused ? headerFocusStyle : {} }}
         aria-expanded={open}
-        aria-label={`${t(open ? 'collapse' : 'expand')}: ${title}`}
+        aria-label={`${t(open ? 'collapse' : 'expand')}: ${cardTitle}`}
         onClick={() => { setOpen(!open) }}
         onFocus={event => {
           // Keyboard focus only: a click focuses the button too, and the built-in
@@ -1216,8 +1393,8 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
         onBlur={() => { setHeaderFocused(false) }}
       >
         <span style={headTextStyle}>
-          <span style={nameStyle}>{title}</span>
-          <span style={descriptionStyle}>{t(variant.introKey)}</span>
+          <span style={nameStyle}>{cardTitle}</span>
+          <span style={descriptionStyle}>{cardIntro}</span>
         </span>
         <span style={{ ...chevronStyle, transform: open ? 'rotate(180deg)' : 'none' }}>
           <ChevronDownIcon />
@@ -1225,6 +1402,39 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
       </button>
       {open
         ? <div style={cardBodyStyle}>
+            {isUnified ? (
+              <>
+                {/* The sidebar quota settings, embedded verbatim rather than
+                    duplicated: one component owns the gate, so the toggles here
+                    and in a standalone card can never disagree. */}
+                <QuotaSettingsContent t={t} scope={scope} signedIn={signedIn} />
+                {/* The variant switcher. Each segment carries its account's
+                    status dot, so a glance says which side has a session
+                    before anything is clicked. */}
+                <div style={segmentedContainerStyle} role="tablist" aria-label="WorkBuddy Version Selection">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={activeVariantId === 'workbuddy'}
+                    style={segmentedTabItemStyle(activeVariantId === 'workbuddy')}
+                    onClick={() => setActiveVariantId('workbuddy')}
+                  >
+                    <span style={dotStyle(cnDotStatus)} aria-hidden="true" />
+                    <span>{t('variantTabCN')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={activeVariantId === 'workbuddy-ai'}
+                    style={segmentedTabItemStyle(activeVariantId === 'workbuddy-ai')}
+                    onClick={() => setActiveVariantId('workbuddy-ai')}
+                  >
+                    <span style={dotStyle(aiDotStatus)} aria-hidden="true" />
+                    <span>{t('variantTabAI')}</span>
+                  </button>
+                </div>
+              </>
+            ) : null}
             <h3 style={quotaTitleStyle}>{t('accountHeading')}</h3>
             <div style={rowStyle}>
               {/* `aria-busy` while nothing has been read: the value is pending, not absent. */}
@@ -1250,12 +1460,12 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
               * A failed read is reported beside the document still on screen,
               * never in place of it: blanking the card over one transient error
               * loses the account, credits and model list the user was reading.
-              * Cleared by the next successful read. `signedIn === undefined`
+              * Cleared by the next successful read. `signedInState === undefined`
               * means no read has ever succeeded, so there is nothing to
               * annotate — the error state below already states the failure on
               * its own, exactly as it did before this notice existed.
             */}
-            {readFailure === undefined || signedIn === undefined
+            {readFailure === undefined || signedInState === undefined
               ? null
               : <p style={errorStyle}>{t('statusRefreshFailed', { message: readFailure })}</p>}
             {status?.status === 'signed-in'
@@ -1359,7 +1569,7 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
                         t={t}
                         disabled={busy}
                         {...status.useMaximumContextWindow === undefined ? {} : { useMaximumContextWindow: status.useMaximumContextWindow }}
-                        {...variant.id === AI_CARD_VARIANT.id
+                        {...currentVariant.id === AI_CARD_VARIANT.id
                           ? { onUseMaximumContextWindow: (enabled: boolean) => { void control({ action: 'set-maximum-context-window', enabled }) } }
                           : {}}
                       />
@@ -1401,7 +1611,7 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
               // rejected for belonging to the other product.
               ? <>
                   <p style={status.reason === undefined ? bodyStyle : errorStyle}>
-                    {status.reason ?? t(variant.signedOutKey)}
+                    {status.reason ?? t(currentVariant.signedOutKey)}
                   </p>
                   {status.loginKey === undefined
                     ? null

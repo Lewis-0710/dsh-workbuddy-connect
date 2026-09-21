@@ -23,7 +23,18 @@ export interface QuotaSignInState {
 
 let pollIntervalMs = 300_000
 const toggles = { cn: false, ai: false }
+/**
+ * Reference-stable views of the two mutable records below.
+ *
+ * `useSyncExternalStore` compares snapshots by IDENTITY, so a getter that
+ * builds a fresh object on every call makes its subscriber re-render forever
+ * and React kills the entry (error #185 — the same crash the settings card's
+ * unstable projection caused). The snapshot objects are therefore replaced
+ * wholesale only when the underlying record actually changes.
+ */
+let togglesSnapshot: QuotaSignInState = { cn: false, ai: false }
 const signIn: QuotaSignInState = { cn: false, ai: false }
+let signInSnapshot: QuotaSignInState = { cn: false, ai: false }
 let revision = 0
 const listeners = new Set<() => void>()
 
@@ -50,29 +61,32 @@ export function setQuotaToggles(cn: boolean, ai: boolean): void {
   if (toggles.cn !== cn || toggles.ai !== ai) {
     toggles.cn = cn
     toggles.ai = ai
+    togglesSnapshot = { ...toggles }
     bump()
   }
 }
 
 /** Read the current toggles. */
 export function quotaToggles(): QuotaSignInState {
-  return { ...toggles }
+  return togglesSnapshot
 }
 
 /** Record a variant's sign-in state from any successful status poll. */
 export function noteQuotaSignIn(variantId: string, signedIn: boolean): void {
   if (variantId === 'workbuddy' && signIn.cn !== signedIn) {
     signIn.cn = signedIn
+    signInSnapshot = { ...signIn }
     bump()
   } else if (variantId === 'workbuddy-ai' && signIn.ai !== signedIn) {
     signIn.ai = signedIn
+    signInSnapshot = { ...signIn }
     bump()
   }
 }
 
 /** Read the cached sign-in state. */
 export function quotaSignInState(): QuotaSignInState {
-  return { ...signIn }
+  return signInSnapshot
 }
 
 /** Subscribe to any flag change; returns the disposer. */

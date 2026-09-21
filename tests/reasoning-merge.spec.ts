@@ -26,7 +26,23 @@ import type { WorkBuddyProbeRecord } from '../src/probe-store.ts'
 
 const CLEANUP: string[] = []
 
+/** Contexts booted by `boot()`, disposed in order in `afterEach`. */
+const CONTEXTS: Context[] = []
+
+/**
+ * Tear down sequentially, and *before* the global stubs go away.
+ *
+ * Each case used to fire `void ctx.fiber.dispose()` at its own end, which let
+ * the next case boot while the previous one was still unwinding. The teardown
+ * unregisters the `workbuddy` provider from the shared LLM seam, so a
+ * still-running disposal could pull the provider out from under a case that
+ * had already registered its own — the failure surfaced as
+ * `provider "workbuddy" has no configured model "auto"`, and moved between
+ * cases with machine load. Awaiting in `afterEach` gives one context per case
+ * and a clean boundary.
+ */
 afterEach(async () => {
+  for (const disposed of CONTEXTS.splice(0)) await disposed.fiber.dispose()
   for (const path of CLEANUP.splice(0)) await rm(path, { recursive: true, force: true })
   vi.unstubAllEnvs()
   vi.unstubAllGlobals()
@@ -76,9 +92,17 @@ async function boot(options: {
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(WorkBuddy, {})
-  await vi.waitFor(() => {
-    expect(ctx.llm.listProviders().map(provider => provider.id)).toContain('workbuddy')
+  // Wait for the provider to be SERVING, not merely present. Registering the
+  // provider and populating it from the fallback roster are separate steps, so
+  // a case that started only on `listProviders()` could resolve a model before
+  // the roster existed — under a loaded machine that surfaced as
+  // `provider "workbuddy" has no configured model "auto"`.
+  await vi.waitFor(async () => {
+    const ids = (await ctx.llm.listModels('workbuddy')).map(model => model.id)
+    expect(ids).toContain('auto')
+    expect(ids).toContain('glm-5.3')
   })
+  CONTEXTS.push(ctx)
   return ctx
 }
 
@@ -93,7 +117,6 @@ describe('probe results merged into the provider', () => {
     const ctx = await boot({})
     // `auto` is the old-form shape: no declared set, no observation.
     expect(await effortsFor(ctx, 'auto')).toBeUndefined()
-    void ctx.fiber.dispose()
   })
 
   it('grants exactly the verified spellings for a validating observation', async () => {
@@ -113,7 +136,6 @@ describe('probe results merged into the provider', () => {
     // `off` is never conferred by probing, even though the picker knows the level.
     expect(efforts).not.toContain('off')
     expect(efforts).not.toContain('minimal')
-    void ctx.fiber.dispose()
   })
 
   it('grants nothing for a non-validating observation', async () => {
@@ -129,7 +151,6 @@ describe('probe results merged into the provider', () => {
       }),
     })
     expect(await effortsFor(ctx, 'auto')).toBeUndefined()
-    void ctx.fiber.dispose()
   })
 
   it('never overrides a declared set with an observation', async () => {
@@ -159,7 +180,6 @@ describe('probe results merged into the provider', () => {
     expect(efforts).toEqual(expected)
     // `max` was in the fabricated observation; it appears only if declared.
     expect(efforts).not.toContain('medium')
-    void ctx.fiber.dispose()
   })
 
   it('ignores an observation whose fingerprint no longer matches the catalog', async () => {
@@ -175,6 +195,5 @@ describe('probe results merged into the provider', () => {
       }),
     })
     expect(await effortsFor(ctx, 'auto')).toBeUndefined()
-    void ctx.fiber.dispose()
   })
 })
