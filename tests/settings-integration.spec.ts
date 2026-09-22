@@ -252,8 +252,8 @@ describe('WorkBuddy Host settings integration', () => {
     // No credential-path field survives on either card: a credential is obtained
     // by signing in and stored by the plugin, so there is nothing left to point
     // at a file.
-    expect(fieldsOf('workbuddy')).toEqual(['probeConsent'])
-    expect(fieldsOf('workbuddy-ai')).toEqual(['useMaximumContextWindow'])
+    expect(fieldsOf('workbuddy')).toEqual(['probeConsent', 'disabledModelsCN'])
+    expect(fieldsOf('workbuddy-ai')).toEqual(['useMaximumContextWindow', 'disabledModelsAI'])
 
     // A write through one section must reach only THAT variant. The schema
     // assertions above prove the two forms are split; this proves the wiring
@@ -288,6 +288,20 @@ describe('WorkBuddy Host settings integration', () => {
     expect(ai).not.toContain('minimax-m3')
     expect(ai).toContain('gpt-5.6-luna')
     expect(cn).not.toContain('gpt-5.6-luna')
+
+    // Disabling a model in CN variant isolates to CN and reflects in listModels
+    let eventsEmitted = 0
+    ctx.on('llm/adapters-updated', () => {
+      eventsEmitted += 1
+    })
+    await ctx.settings.update('workbuddy', { disabledModelsCN: ['minimax-m3'] })
+    await vi.waitFor(async () => {
+      const updatedCn = (await ctx.llm.listModels('workbuddy')).map(model => model.id)
+      expect(updatedCn).not.toContain('minimax-m3')
+    })
+    expect(eventsEmitted).toBeGreaterThan(0)
+    // AI variant remains unaffected
+    expect((await ctx.llm.listModels('workbuddy-ai')).map(model => model.id)).toContain('gpt-5.6-luna')
   })
 
   /**

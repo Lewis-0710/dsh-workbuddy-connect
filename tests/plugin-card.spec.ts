@@ -326,4 +326,42 @@ describe('WorkBuddy plugin card', () => {
     // The track renders no fill child, unlike a known percentage.
     expect(bar!.children).toHaveLength(0)
   })
+
+  it('renders model toggles tab and allows toggling models and search', async () => {
+    status()
+    statusBody.models = [
+      { id: 'model-a', name: 'Model A', contextWindow: 100_000 },
+      { id: 'model-b', name: 'Model B', contextWindow: 200_000 },
+    ]
+    statusBody.disabledModels = ['model-b']
+    let sentAction: any
+    request.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method !== 'POST') return { ok: true, json: async () => statusBody }
+      sentAction = JSON.parse(String(init.body))
+      if (sentAction.action === 'set-disabled-models') {
+        statusBody.disabledModels = sentAction.disabledModels
+      }
+      return { ok: true, json: async () => ({ state: 'updated' }) }
+    })
+
+    await mount()
+    await press(en.tabModels)
+
+    const rendered = JSON.stringify(view!.toJSON())
+    expect(rendered).toContain('Model A')
+    expect(rendered).toContain('Model B')
+    expect(rendered).toContain('1 / 2') // 1 enabled out of 2
+
+    // Check individual toggle: enable model-b
+    const checkboxes = view!.root.findAllByType('input').filter(node => node.props.type === 'checkbox')
+    // First checkbox is selectAll, then model-a, model-b
+    expect(checkboxes.length).toBe(3)
+    expect(checkboxes[1]!.props.checked).toBe(true) // model-a enabled
+    expect(checkboxes[2]!.props.checked).toBe(false) // model-b disabled
+
+    await act(async () => {
+      checkboxes[2]!.props.onChange({ currentTarget: { checked: true } })
+    })
+    expect(sentAction).toEqual({ action: 'set-disabled-models', disabledModels: [] })
+  })
 })

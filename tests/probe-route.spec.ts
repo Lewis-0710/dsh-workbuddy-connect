@@ -177,6 +177,19 @@ describe('probe control route', () => {
     expect(enabled).toBe(true)
   })
 
+  it('accepts the disabled-models preference when the host supports it', async () => {
+    let received: readonly string[] | undefined
+    const { origin, key } = await mount({
+      setDisabledModels: async models => {
+        received = models
+        return { state: 'updated' }
+      },
+    })
+    const result = await post(origin, { action: 'set-disabled-models', disabledModels: ['model-a', 'model-b'] }, { 'X-WorkBuddy-Probe-Key': key })
+    expect(result).toMatchObject({ status: 200, body: { state: 'updated' } })
+    expect(received).toEqual(['model-a', 'model-b'])
+  })
+
   it('mints a distinct key per call', () => {
     expect(createProbeKey()).not.toBe(createProbeKey())
   })

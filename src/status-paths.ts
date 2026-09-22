@@ -106,16 +106,19 @@ export interface WorkBuddyProbeAction {
   /**
    * `probe` spends credit on one model; `clear` drops recorded observations;
    * `refresh` re-reads the credential and re-fetches the model catalog;
-   * `set-maximum-context-window` persists the international card preference.
+   * `set-maximum-context-window` persists the international card preference;
+   * `set-disabled-models` sets the list of disabled model IDs for this variant.
    *
-   * All four are writes, which is why they share this route's in-process key
+   * All are writes, which is why they share this route's in-process key
    * and loopback guards rather than the read-only status GET.
    */
-  action: 'probe' | 'clear' | 'refresh' | 'set-maximum-context-window'
+  action: 'probe' | 'clear' | 'refresh' | 'set-maximum-context-window' | 'set-disabled-models'
   /** Target model id; required for `probe`. */
   model?: string
   /** Requested value for `set-maximum-context-window`. */
   enabled?: boolean
+  /** Requested disabled model ids for `set-disabled-models`. */
+  disabledModels?: readonly string[]
 }
 
 /**
@@ -241,6 +244,8 @@ export type WorkBuddyWebStatus =
     probe?: WorkBuddyWebProbeSection
     /** International-card preference selecting larger declared context windows. */
     useMaximumContextWindow?: boolean
+    /** List of model IDs disabled for this variant. */
+    disabledModels?: readonly string[]
     /**
      * In-process key authorizing probe control writes. Handed to the card with
      * the status document (the card is same-origin and already had to pass the

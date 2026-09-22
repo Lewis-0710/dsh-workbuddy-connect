@@ -46,6 +46,8 @@ export interface WorkBuddyStatusRouteOptions {
   loginKey?: string
   /** International-card preference selecting larger declared context windows. */
   useMaximumContextWindow?: () => boolean
+  /** Read the list of disabled model IDs for this variant. */
+  disabledModels?: () => readonly string[]
   /**
    * Route path to mount. Defaults to the CN variant's path so existing callers
    * and tests keep their behaviour; the international variant passes its own.
@@ -165,14 +167,13 @@ export async function workBuddyWebStatus(
   // consent switches and results without a second request. The control key
   // travels with it: this response already passed the loopback guard, and the
   // key authorizes only probe control, never credentials or completions.
-  const probed: WorkBuddyWebStatus = deps.probe === undefined
-    ? statusWithModels
-    : {
-      ...statusWithModels,
-      probe: deps.probe(),
-      ...deps.probeKey === undefined ? {} : { probeKey: deps.probeKey },
-      ...deps.useMaximumContextWindow === undefined ? {} : { useMaximumContextWindow: deps.useMaximumContextWindow() },
-    }
+  const probed: WorkBuddyWebStatus = {
+    ...statusWithModels,
+    ...deps.probe === undefined ? {} : { probe: deps.probe() },
+    ...deps.probeKey === undefined ? {} : { probeKey: deps.probeKey },
+    ...deps.useMaximumContextWindow === undefined ? {} : { useMaximumContextWindow: deps.useMaximumContextWindow() },
+    ...deps.disabledModels === undefined ? {} : { disabledModels: deps.disabledModels() },
+  }
   try {
     const credential = await deps.store.current()
     if (credential !== undefined) {

@@ -831,8 +831,11 @@ declare class WorkBuddyCatalog {
   private models;
   private visible;
   private useMaximumContextWindow;
+  private disabledModelIds;
   constructor(initial?: readonly WorkBuddyModelInfo[]);
-  /** Current entries; empty while the variant has no usable credential. */
+  /** All known models before filtering disabled ones; empty while the variant has no usable credential. */
+  all(): readonly WorkBuddyModelInfo[];
+  /** Current enabled entries; empty while the variant has no usable credential. */
   current(): readonly WorkBuddyModelInfo[];
   /** Replace the list; callers invalidate their adapter snapshot after this. */
   set(models: readonly WorkBuddyModelInfo[]): void;
@@ -845,6 +848,10 @@ declare class WorkBuddyCatalog {
   setVisible(visible: boolean): boolean;
   /** Select the largest declared international window where the upstream offers one. */
   setUseMaximumContextWindow(useMaximum: boolean): boolean;
+  /** Update the set of disabled model ids. Returns whether the effective disabled set changed. */
+  setDisabledModels(disabled: readonly string[]): boolean;
+  /** Currently disabled model ids as an array. */
+  disabledModels(): string[];
   /** Models to fall back to when the upstream fetch fails; ignores visibility. */
   fallback(): readonly WorkBuddyModelInfo[];
 }
@@ -1462,6 +1469,10 @@ interface Config {
   probeConsent?: boolean;
   /** Use the largest context window the international catalog explicitly offers. */
   useMaximumContextWindow?: boolean;
+  /** Disabled model IDs for China variant. */
+  disabledModelsCN?: string[];
+  /** Disabled model IDs for international variant. */
+  disabledModelsAI?: string[];
   /** Show the CN variant's sidebar quota card. */
   sidebarQuotaCN?: boolean;
   /** Show the international variant's sidebar quota card. */

@@ -101,11 +101,12 @@ export class WorkBuddyCatalog {
   private models: readonly WorkBuddyModelInfo[]
   private visible = true
   private useMaximumContextWindow = false
+  private disabledModelIds = new Set<string>()
 
   constructor(initial: readonly WorkBuddyModelInfo[] = FALLBACK_WORKBUDDY_MODELS) { this.models = initial }
 
-  /** Current entries; empty while the variant has no usable credential. */
-  current(): readonly WorkBuddyModelInfo[] {
+  /** All known models before filtering disabled ones; empty while the variant has no usable credential. */
+  all(): readonly WorkBuddyModelInfo[] {
     if (!this.visible) return []
     return this.models.map(model => {
       const current = modelWithCurrentPromotion(model)
@@ -114,6 +115,11 @@ export class WorkBuddyCatalog {
         ? { ...current, defaultContextWindow: current.defaultContextWindow ?? current.contextWindow, contextWindow: maximum }
         : current
     })
+  }
+
+  /** Current enabled entries; empty while the variant has no usable credential. */
+  current(): readonly WorkBuddyModelInfo[] {
+    return this.all().filter(model => !this.disabledModelIds.has(model.id))
   }
 
   /** Replace the list; callers invalidate their adapter snapshot after this. */
@@ -141,6 +147,28 @@ export class WorkBuddyCatalog {
     if (this.useMaximumContextWindow === useMaximum) return false
     this.useMaximumContextWindow = useMaximum
     return true
+  }
+
+  /** Update the set of disabled model ids. Returns whether the effective disabled set changed. */
+  setDisabledModels(disabled: readonly string[]): boolean {
+    const next = new Set(disabled)
+    if (next.size === this.disabledModelIds.size) {
+      let same = true
+      for (const id of next) {
+        if (!this.disabledModelIds.has(id)) {
+          same = false
+          break
+        }
+      }
+      if (same) return false
+    }
+    this.disabledModelIds = next
+    return true
+  }
+
+  /** Currently disabled model ids as an array. */
+  disabledModels(): string[] {
+    return [...this.disabledModelIds]
   }
 
   /** Models to fall back to when the upstream fetch fails; ignores visibility. */

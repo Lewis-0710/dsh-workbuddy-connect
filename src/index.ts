@@ -256,6 +256,10 @@ export interface Config {
   probeConsent?: boolean
   /** Use the largest context window the international catalog explicitly offers. */
   useMaximumContextWindow?: boolean
+  /** Disabled model IDs for China variant. */
+  disabledModelsCN?: string[]
+  /** Disabled model IDs for international variant. */
+  disabledModelsAI?: string[]
   /** Show the CN variant's sidebar quota card. */
   sidebarQuotaCN?: boolean
   /** Show the international variant's sidebar quota card. */
@@ -274,6 +278,8 @@ const PROBE_CONSENT_FIELD = z.boolean().default(false)
   .description('Authorize reasoning-effort probes (each probe sends real requests that may consume credit)')
 const MAXIMUM_CONTEXT_WINDOW_FIELD = z.boolean().default(true)
   .description('Use the largest context window declared by WorkBuddy AI when alternatives are available (on by default)')
+const DISABLED_MODELS_FIELD = z.array(z.string()).default([])
+  .description('Disabled model IDs for this variant (empty by default)')
 
 /** Sidebar quota toggle (one per variant; both live on the shared quota card). */
 const QUOTA_TOGGLE_FIELD = z.boolean().default(false)
@@ -295,6 +301,8 @@ const QUOTA_POLL_FIELD = z.number()
 export const Config: z<Config> = z.object({
   probeConsent: PROBE_CONSENT_FIELD,
   useMaximumContextWindow: MAXIMUM_CONTEXT_WINDOW_FIELD,
+  disabledModelsCN: DISABLED_MODELS_FIELD,
+  disabledModelsAI: DISABLED_MODELS_FIELD,
   sidebarQuotaCN: QUOTA_TOGGLE_FIELD,
   sidebarQuotaAI: QUOTA_TOGGLE_FIELD,
   quotaPollMs: QUOTA_POLL_FIELD,
@@ -311,11 +319,13 @@ export const Config: z<Config> = z.object({
  */
 const CN_SECTION: z<Config> = z.object({
   probeConsent: PROBE_CONSENT_FIELD,
+  disabledModelsCN: DISABLED_MODELS_FIELD,
 })
 
 /** The international card's settings section and its context-window preference. */
 const AI_SECTION: z<Config> = z.object({
   useMaximumContextWindow: MAXIMUM_CONTEXT_WINDOW_FIELD,
+  disabledModelsAI: DISABLED_MODELS_FIELD,
 })
 
 /**
@@ -425,7 +435,12 @@ function createVariantRuntime(
   })
   const fallback = fallbackFor(variant)
   const catalog = new WorkBuddyCatalog(fallback)
-  if (variant.id !== CN_VARIANT.id) catalog.setUseMaximumContextWindow(config.useMaximumContextWindow === true)
+  if (variant.id !== CN_VARIANT.id) {
+    catalog.setUseMaximumContextWindow(config.useMaximumContextWindow === true)
+    if (config.disabledModelsAI !== undefined) catalog.setDisabledModels(config.disabledModelsAI)
+  } else {
+    if (config.disabledModelsCN !== undefined) catalog.setDisabledModels(config.disabledModelsCN)
+  }
   // Start hidden: a variant must serve no models until an account has actually
   // been adopted, so a signed-out variant is empty rather than showing a roster
   // whose models could only fail. `adoptIdentity` is what reveals it, and it
@@ -674,6 +689,7 @@ export function apply(ctx: Context, config: Config): void {
    */
   const loginAttempts = new Map<string, WorkBuddyLoginAttempt>()
   let setMaximumContextWindow: ((enabled: boolean) => Promise<{ state: string; reason?: string }>) | undefined
+  let setDisabledModelsForVariant: ((variantId: string, disabled: readonly string[]) => Promise<{ state: string; reason?: string }>) | undefined
   /**
    * Point a variant at an account identity, invalidating whatever the previous
    * one left behind.
@@ -751,12 +767,13 @@ export function apply(ctx: Context, config: Config): void {
         path: runtime.variant.statusPath,
         store: runtime.store,
         client: runtime.client,
-        models: () => runtime.catalog.current(),
+        models: () => runtime.catalog.all(),
         catalog: () => catalogSection(runtime),
         probe: () => probeSection(runtime, current().probeConsent === true),
         probeKey,
         loginKey,
         ...runtime.variant.id === CN_VARIANT.id ? {} : { useMaximumContextWindow: () => current().useMaximumContextWindow === true },
+        disabledModels: () => runtime.catalog.disabledModels(),
       })
       registerWorkBuddyLoginRoute(webCtx, {
         path: runtime.variant.loginPath,
@@ -881,6 +898,10 @@ export function apply(ctx: Context, config: Config): void {
             ? { state: 'refreshed', reason: `${runtime.catalog.current().length} models` }
             : { state: 'failed', reason: runtime.catalogError }
         },
+        setDisabledModels: async disabled => {
+          if (setDisabledModelsForVariant === undefined) return { state: 'failed', reason: 'settings are unavailable' }
+          return setDisabledModelsForVariant(runtime.variant.id, disabled)
+        },
         ...runtime.variant.id === CN_VARIANT.id ? {} : {
           setMaximumContextWindow: async enabled => {
             if (setMaximumContextWindow === undefined) return { state: 'failed', reason: 'settings are unavailable' }
@@ -914,7 +935,9 @@ export function apply(ctx: Context, config: Config): void {
     /** Merge both sections into the whole config the rest of the plugin reads. */
     const merged = (): Config => ({
       ...sources.cn().probeConsent === undefined ? {} : { probeConsent: sources.cn().probeConsent },
+      ...sources.cn().disabledModelsCN === undefined ? {} : { disabledModelsCN: sources.cn().disabledModelsCN },
       ...sources.ai().useMaximumContextWindow === undefined ? {} : { useMaximumContextWindow: sources.ai().useMaximumContextWindow },
+      ...sources.ai().disabledModelsAI === undefined ? {} : { disabledModelsAI: sources.ai().disabledModelsAI },
       ...sources.quota().sidebarQuotaCN === undefined ? {} : { sidebarQuotaCN: sources.quota().sidebarQuotaCN },
       ...sources.quota().sidebarQuotaAI === undefined ? {} : { sidebarQuotaAI: sources.quota().sidebarQuotaAI },
       ...sources.quota().quotaPollMs === undefined ? {} : { quotaPollMs: sources.quota().quotaPollMs },
@@ -923,8 +946,20 @@ export function apply(ctx: Context, config: Config): void {
       const runtime = runtimes.find(candidate => candidate.variant.id !== CN_VARIANT.id)
       if (runtime?.catalog.setUseMaximumContextWindow(next.useMaximumContextWindow === true)) runtime.invalidate()
     }
+    const applyDisabledModels = (next: Config): void => {
+      for (const runtime of runtimes) {
+        const disabled = runtime.variant.id === CN_VARIANT.id
+          ? (next.disabledModelsCN ?? [])
+          : (next.disabledModelsAI ?? [])
+        if (runtime.catalog.setDisabledModels(disabled)) {
+          runtime.invalidate()
+        }
+      }
+    }
     const repointStores = (): void => {
-      applyMaximumContextWindow(merged())
+      const next = merged()
+      applyMaximumContextWindow(next)
+      applyDisabledModels(next)
     }
     settingsCtx.settings.installSection(ctx, WORKBUDDY_SETTINGS_NS, CN_SECTION, config, {
       setSource(source) { sources.cn = source as () => Config; current = merged },
@@ -940,6 +975,12 @@ export function apply(ctx: Context, config: Config): void {
     })
     setMaximumContextWindow = async enabled => {
       await settingsCtx.settings.update(WORKBUDDY_AI_SETTINGS_NS, { useMaximumContextWindow: enabled })
+      return { state: 'updated' }
+    }
+    setDisabledModelsForVariant = async (variantId, disabled) => {
+      const ns = variantId === CN_VARIANT.id ? WORKBUDDY_SETTINGS_NS : WORKBUDDY_AI_SETTINGS_NS
+      const key = variantId === CN_VARIANT.id ? 'disabledModelsCN' : 'disabledModelsAI'
+      await settingsCtx.settings.update(ns, { [key]: [...disabled] })
       return { state: 'updated' }
     }
   })

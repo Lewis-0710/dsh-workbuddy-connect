@@ -49,6 +49,8 @@ export interface WorkBuddyProbeRouteOptions {
   refresh?: () => Promise<{ state: string; reason?: string }>
   /** Persist and apply the international context-window preference. */
   setMaximumContextWindow?: (enabled: boolean) => Promise<{ state: string; reason?: string }>
+  /** Persist and apply the disabled models preference. */
+  setDisabledModels?: (disabledModels: readonly string[]) => Promise<{ state: string; reason?: string }>
   /**
    * Route path to mount. Defaults to the CN variant's path so existing callers
    * and tests keep their behaviour; the international variant passes its own.
@@ -110,6 +112,11 @@ function parseAction(text: string): WorkBuddyProbeAction | undefined {
       ? { action: 'set-maximum-context-window', enabled: wrapped['enabled'] }
       : undefined
   }
+  if (action === 'set-disabled-models') {
+    return Array.isArray(wrapped['disabledModels']) && wrapped['disabledModels'].every(item => typeof item === 'string')
+      ? { action: 'set-disabled-models', disabledModels: wrapped['disabledModels'] as string[] }
+      : undefined
+  }
   if (action === 'probe') {
     const model = wrapped['model']
     if (typeof model !== 'string' || model.trim() === '') return undefined
@@ -169,6 +176,14 @@ export function workBuddyProbeHandler(
           return
         }
         json(res, 200, await deps.setMaximumContextWindow(action.enabled === true))
+        return
+      }
+      if (action.action === 'set-disabled-models') {
+        if (deps.setDisabledModels === undefined) {
+          json(res, 404, { error: 'disabled-models-setting-not-supported' })
+          return
+        }
+        json(res, 200, await deps.setDisabledModels(action.disabledModels ?? []))
         return
       }
       json(res, 200, await deps.probe(action.model as string))

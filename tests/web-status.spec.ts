@@ -133,6 +133,18 @@ describe('web status route gate', () => {
     expect(JSON.parse(response.body)).toMatchObject({ status: 'signed-in', nickname: '昵称' })
   })
 
+  it('serves disabledModels when provided by dependencies', async () => {
+    const port = await startStatusServer({
+      disabledModels: () => ['model-disabled-1', 'model-disabled-2'],
+    })
+    const response = await requestOnce({ port, method: 'GET', headers: { host: `127.0.0.1:${String(port)}` } })
+    expect(response.status).toBe(200)
+    expect(JSON.parse(response.body)).toMatchObject({
+      status: 'signed-in',
+      disabledModels: ['model-disabled-1', 'model-disabled-2'],
+    })
+  })
+
   it('carries the sign-in key on the signed-in document too', async () => {
     // The card gates sign-out and account switching on this key. Sending it only
     // with the signed-out document left both actions unreachable for a signed-in

@@ -626,6 +626,172 @@ function formatTokens(tokens: number): string {
 }
 
 /**
+ * Model toggle section: individual model toggles, search filtering, select-all checkbox,
+ * and bulk enable/disable actions.
+ */
+function ModelTogglesSection({ models, disabledModels = [], t, disabled, onToggleModel, onSetDisabledModels }: {
+  models: readonly WorkBuddyWebModelBadge[] | undefined
+  disabledModels?: readonly string[] | undefined
+  t: WorkBuddyPluginCardInjected['t']
+  disabled?: boolean
+  onToggleModel: (modelId: string, enabled: boolean) => void
+  onSetDisabledModels: (disabledIds: readonly string[]) => void
+}): React.ReactNode {
+  const [search, setSearch] = useState('')
+  const disabledSet = new Set(disabledModels)
+  const allModels = models ?? []
+  const query = search.trim().toLowerCase()
+  const filtered = query === ''
+    ? allModels
+    : allModels.filter(m => m.name.toLowerCase().includes(query) || m.id.toLowerCase().includes(query))
+
+  const enabledCount = allModels.filter(m => !disabledSet.has(m.id)).length
+  const totalCount = allModels.length
+
+  // Filtered models state
+  const filteredEnabledCount = filtered.filter(m => !disabledSet.has(m.id)).length
+  const allFilteredEnabled = filtered.length > 0 && filteredEnabledCount === filtered.length
+  const someFilteredEnabled = filteredEnabledCount > 0 && filteredEnabledCount < filtered.length
+
+  const handleSelectAllCheckbox = (checked: boolean) => {
+    if (checked) {
+      // Enable all filtered models
+      const filteredIds = new Set(filtered.map(m => m.id))
+      const nextDisabled = disabledModels.filter(id => !filteredIds.has(id))
+      onSetDisabledModels(nextDisabled)
+    } else {
+      // Disable all filtered models
+      const nextDisabled = Array.from(new Set([...disabledModels, ...filtered.map(m => m.id)]))
+      onSetDisabledModels(nextDisabled)
+    }
+  }
+
+  const handleEnableAll = () => {
+    const filteredIds = new Set(filtered.map(m => m.id))
+    const nextDisabled = disabledModels.filter(id => !filteredIds.has(id))
+    onSetDisabledModels(nextDisabled)
+  }
+
+  const handleDisableAll = () => {
+    const nextDisabled = Array.from(new Set([...disabledModels, ...filtered.map(m => m.id)]))
+    onSetDisabledModels(nextDisabled)
+  }
+
+  return (
+    <div style={quotaListStyle}>
+      <div style={rowStyle}>
+        <span style={bodyStyle}>
+          {t('modelsEnabledCount', { enabled: enabledCount, total: totalCount })}
+        </span>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button
+            type="button"
+            style={buttonStyle}
+            disabled={disabled || filtered.length === 0}
+            onClick={handleEnableAll}
+          >
+            {t('modelsEnableAll')}
+          </button>
+          <button
+            type="button"
+            style={buttonStyle}
+            disabled={disabled || filtered.length === 0}
+            onClick={handleDisableAll}
+          >
+            {t('modelsDisableAll')}
+          </button>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        <input
+          type="text"
+          value={search}
+          onChange={e => { setSearch(e.target.value) }}
+          placeholder={t('modelsSearchPlaceholder')}
+          style={{
+            flex: 1,
+            boxSizing: 'border-box',
+            padding: '6px 12px',
+            border: '1px solid var(--dsw-alias-border-l2)',
+            borderRadius: 8,
+            background: 'var(--dsw-alias-bg-layer-2)',
+            color: 'var(--dsw-alias-label-primary)',
+            fontSize: 13,
+            outline: 'none',
+          }}
+        />
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid var(--dsw-alias-border-l2)' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: disabled || filtered.length === 0 ? 'default' : 'pointer', fontSize: 13, color: 'var(--dsw-alias-label-secondary)' }}>
+          <input
+            type="checkbox"
+            disabled={disabled || filtered.length === 0}
+            checked={allFilteredEnabled}
+            ref={el => {
+              if (el) el.indeterminate = someFilteredEnabled
+            }}
+            onChange={e => { handleSelectAllCheckbox(e.currentTarget?.checked ?? e.target.checked) }}
+          />
+          <span>{t('modelsSelectAll')}</span>
+        </label>
+      </div>
+
+      {filtered.length === 0 ? (
+        <p style={bodyStyle}>{t('modelsNoMatch')}</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {filtered.map(model => {
+            const isEnabled = !disabledSet.has(model.id)
+            return (
+              <div
+                key={model.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '8px 10px',
+                  borderRadius: 8,
+                  background: 'var(--dsw-alias-bg-layer-2)',
+                  border: '1px solid var(--dsw-alias-border-l2)',
+                }}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--dsw-alias-label-primary)' }}>{model.name}</span>
+                    <span style={{ fontSize: 11, color: 'var(--dsw-alias-label-tertiary)' }}>({model.id})</span>
+                    <span style={modelBadgeStyle}>
+                      {model.badges?.map(badge => (
+                        <span key={badge} style={modelBadgeChipStyle}>{modelBadgeLabel(badge, t)}</span>
+                      ))}
+                      {model.free === true ? <span style={modelBadgeChipStyle}>{t('freeModel')}</span> : null}
+                    </span>
+                  </div>
+                  {model.credits !== undefined ? (
+                    <span style={modelRateStyle}>{t('rate', { rate: model.credits })}</span>
+                  ) : model.rateUnknown === true ? (
+                    <span style={modelRateStyle}>{t('rateUnknown')}</span>
+                  ) : null}
+                </div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: disabled ? 'default' : 'pointer', flexShrink: 0 }}>
+                  <input
+                    type="checkbox"
+                    checked={isEnabled}
+                    disabled={disabled}
+                    onChange={e => { onToggleModel(model.id, e.currentTarget?.checked ?? e.target.checked) }}
+                  />
+                </label>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
  * Reasoning-effort detection section: consent switches, per-model detection,
  * and the recorded observations.
  *
@@ -840,7 +1006,7 @@ export function WorkBuddyPluginCard(props: WorkBuddyPluginCardProps) {
   // carries; the two reference sets — context capacity, then rates and the
   // per-package breakdown — are deliberate visits, since neither changes while
   // you watch.
-  const [tab, setTab] = useState<'status' | 'context' | 'details'>('status')
+  const [tab, setTab] = useState<'status' | 'context' | 'models' | 'details'>('status')
   const mounted = useRef(true)
   /**
    * Identity of the newest read that may write. Assigned when a read *starts*,
@@ -1030,7 +1196,7 @@ export function WorkBuddyPluginCard(props: WorkBuddyPluginCardProps) {
    * the host never accepts a prompt, a sentinel, or a model outside its own
    * catalog from here.
    */
-  const control = useCallback(async (action: { action: 'probe'; model: string } | { action: 'clear' } | { action: 'set-maximum-context-window'; enabled: boolean }): Promise<void> => {
+  const control = useCallback(async (action: { action: 'probe'; model: string } | { action: 'clear' } | { action: 'set-maximum-context-window'; enabled: boolean } | { action: 'set-disabled-models'; disabledModels: readonly string[] }): Promise<void> => {
     const key = status?.status === 'signed-in' ? status.probeKey : undefined
     if (key === undefined) return
     setBusy(true)
@@ -1051,6 +1217,13 @@ export function WorkBuddyPluginCard(props: WorkBuddyPluginCardProps) {
         throw new Error(message)
       }
       if (action.action === 'set-maximum-context-window'
+        && (typeof value !== 'object' || value === null || (value as Record<string, unknown>)['state'] !== 'updated')) {
+        const reason = typeof value === 'object' && value !== null && 'reason' in value
+          ? String((value as Record<string, unknown>)['reason'])
+          : t('requestFailed')
+        throw new Error(reason)
+      }
+      if (action.action === 'set-disabled-models'
         && (typeof value !== 'object' || value === null || (value as Record<string, unknown>)['state'] !== 'updated')) {
         const reason = typeof value === 'object' && value !== null && 'reason' in value
           ? String((value as Record<string, unknown>)['reason'])
@@ -1517,7 +1690,7 @@ export function WorkBuddyPluginCard(props: WorkBuddyPluginCardProps) {
                     * decision-relevant.
                     */}
                   <div role="tablist" style={tabBarStyle}>
-                    {(['status', 'context', 'details'] as const).map(id => (
+                    {(['status', 'context', 'models', 'details'] as const).map(id => (
                       <button
                         key={id}
                         type="button"
@@ -1526,7 +1699,7 @@ export function WorkBuddyPluginCard(props: WorkBuddyPluginCardProps) {
                         onClick={() => { setTab(id) }}
                         style={{ ...tabStyle, ...(tab === id ? tabActiveStyle : {}) }}
                       >
-                        {t(id === 'status' ? 'tabStatus' : id === 'context' ? 'tabContext' : 'tabDetails')}
+                        {t(id === 'status' ? 'tabStatus' : id === 'context' ? 'tabContext' : id === 'models' ? 'tabModels' : 'tabDetails')}
                       </button>
                     ))}
                   </div>
@@ -1572,6 +1745,25 @@ export function WorkBuddyPluginCard(props: WorkBuddyPluginCardProps) {
                         {...currentVariant.id === AI_CARD_VARIANT.id
                           ? { onUseMaximumContextWindow: (enabled: boolean) => { void control({ action: 'set-maximum-context-window', enabled }) } }
                           : {}}
+                      />
+                    </div>
+                  ) : tab === 'models' ? (
+                    <div style={tabPanelStyle}>
+                      <ModelTogglesSection
+                        models={status.models}
+                        disabledModels={status.disabledModels}
+                        t={t}
+                        disabled={busy}
+                        onToggleModel={(modelId, enabled) => {
+                          const currentDisabled = status.disabledModels ?? []
+                          const nextDisabled = enabled
+                            ? currentDisabled.filter(id => id !== modelId)
+                            : [...currentDisabled.filter(id => id !== modelId), modelId]
+                          void control({ action: 'set-disabled-models', disabledModels: nextDisabled })
+                        }}
+                        onSetDisabledModels={disabledIds => {
+                          void control({ action: 'set-disabled-models', disabledModels: disabledIds })
+                        }}
                       />
                     </div>
                   ) : (
