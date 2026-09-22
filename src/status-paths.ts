@@ -107,12 +107,21 @@ export interface WorkBuddyProbeAction {
    * `probe` spends credit on one model; `clear` drops recorded observations;
    * `refresh` re-reads the credential and re-fetches the model catalog;
    * `set-maximum-context-window` persists the international card preference;
-   * `set-disabled-models` sets the list of disabled model IDs for this variant.
+   * `set-disabled-models` sets the list of disabled model IDs for this variant;
+   * `clear-checkin-logs` clears the check-in history logs for this variant;
+   * `checkin` triggers an immediate check-in attempt for this variant.
    *
    * All are writes, which is why they share this route's in-process key
    * and loopback guards rather than the read-only status GET.
    */
-  action: 'probe' | 'clear' | 'refresh' | 'set-maximum-context-window' | 'set-disabled-models'
+  action:
+    | 'probe'
+    | 'clear'
+    | 'refresh'
+    | 'set-maximum-context-window'
+    | 'set-disabled-models'
+    | 'clear-checkin-logs'
+    | 'checkin'
   /** Target model id; required for `probe`. */
   model?: string
   /** Requested value for `set-maximum-context-window`. */
@@ -252,11 +261,32 @@ export type WorkBuddyWebStatus =
      * loopback guard); it is never persisted and rotates per process.
      */
     probeKey?: string
-    /**
-     * In-process key authorizing sign-in writes, including signing out. Travels
+    /** In-process key authorizing sign-in writes, including signing out. Travels
      * with the document for the same reason `probeKey` does.
      */
     loginKey?: string
+    /**
+     * Daily check-in status record for this variant.
+     */
+    checkIn?: {
+      lastDate: string
+      lastAt: number
+      status: 'claimed' | 'already-claimed' | 'no-campaign' | 'error'
+      amount?: number | undefined
+      message?: string | undefined
+      /**
+       * When the scheduler's timer is next due, epoch ms.
+       */
+      nextRunAt?: number | undefined
+      logs?: readonly {
+        id: string
+        date: string
+        timestamp: number
+        status: 'claimed' | 'already-claimed' | 'no-campaign' | 'error'
+        amount?: number | undefined
+        message?: string | undefined
+      }[] | undefined
+    } | undefined
   }
   | {
     /**

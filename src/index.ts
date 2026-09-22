@@ -35,6 +35,13 @@ import type { WorkBuddyWebCatalog, WorkBuddyWebProbeSection } from './status-pat
 import { clearHostHeartbeat, writeHostHeartbeat } from './host-heartbeat.ts'
 import { WORKBUDDY_CONNECT_VERSION } from './version.ts'
 import { CN_VARIANT, WORKBUDDY_VARIANTS, type WorkBuddyVariant } from './variants.ts'
+import { WorkBuddyCheckInService, type WorkBuddyCheckInResult } from './checkin.ts'
+import {
+  CheckInScheduler,
+  DEFAULT_CHECK_IN_MINUTE,
+  JsonFileCheckInStore,
+  normalizeCheckInMinute,
+} from './checkin-scheduler.ts'
 
 export { WORKBUDDY_PROVIDER, WORKBUDDY_STREAM_IDLE_TIMEOUT_MS, createWorkBuddyAdapter, type WorkBuddyAdapter } from './adapter.ts'
 export { createWorkBuddyShim, type WorkBuddyShim } from './shim.ts'
@@ -264,6 +271,14 @@ export interface Config {
   sidebarQuotaCN?: boolean
   /** Show the international variant's sidebar quota card. */
   sidebarQuotaAI?: boolean
+  /** Automatically check in daily at 10:00 (UTC+8) to claim credits for China variant. */
+  autoCheckInCN?: boolean
+  /** Automatically check in daily at 10:00 (UTC+8) to claim credits for AI variant. */
+  autoCheckInAI?: boolean
+  /** When the China variant checks in, as minutes past midnight in UTC+8 (600 = 10:00). */
+  checkInMinuteCN?: number
+  /** When the AI variant checks in, as minutes past midnight in UTC+8 (600 = 10:00). */
+  checkInMinuteAI?: number
   /**
    * Sidebar quota refresh interval in milliseconds. One shared value (both
    * cards poll on it) because the two widgets hit the same rate-limited
@@ -283,7 +298,18 @@ const DISABLED_MODELS_FIELD = z.array(z.string()).default([])
 
 /** Sidebar quota toggle (one per variant; both live on the shared quota card). */
 const QUOTA_TOGGLE_FIELD = z.boolean().default(false)
-  .description('Show this variant\u2019s remaining-credit card in the sidebar footer (off by default)')
+  .description('Show this variant’s remaining-credit card in the sidebar footer (off by default)')
+/** Automatic check-in toggle. */
+const AUTO_CHECK_IN_FIELD = z.boolean().default(false)
+  .description('每天自动签到领取算力额度（默认关闭）')
+/**
+ * When a variant checks in, as minutes past midnight in UTC+8.
+ */
+const CHECK_IN_MINUTE_FIELD = z.number()
+  .default(DEFAULT_CHECK_IN_MINUTE)
+  .min(0)
+  .max(1439)
+  .description('每日自动签到的时刻（自 UTC+8 午夜起的分钟数，600 = 10:00）')
 /**
  * Quota poll interval: default 5 minutes, floor 1 minute. The status route
  * performs a live upstream billing call per request with no cache, so an
@@ -305,6 +331,10 @@ export const Config: z<Config> = z.object({
   disabledModelsAI: DISABLED_MODELS_FIELD,
   sidebarQuotaCN: QUOTA_TOGGLE_FIELD,
   sidebarQuotaAI: QUOTA_TOGGLE_FIELD,
+  autoCheckInCN: AUTO_CHECK_IN_FIELD,
+  autoCheckInAI: AUTO_CHECK_IN_FIELD,
+  checkInMinuteCN: CHECK_IN_MINUTE_FIELD,
+  checkInMinuteAI: CHECK_IN_MINUTE_FIELD,
   quotaPollMs: QUOTA_POLL_FIELD,
 })
 
@@ -338,14 +368,53 @@ const AI_SECTION: z<Config> = z.object({
 const QUOTA_SECTION: z<Config> = z.object({
   sidebarQuotaCN: QUOTA_TOGGLE_FIELD,
   sidebarQuotaAI: QUOTA_TOGGLE_FIELD,
+  autoCheckInCN: AUTO_CHECK_IN_FIELD,
+  autoCheckInAI: AUTO_CHECK_IN_FIELD,
+  checkInMinuteCN: CHECK_IN_MINUTE_FIELD,
+  checkInMinuteAI: CHECK_IN_MINUTE_FIELD,
   quotaPollMs: QUOTA_POLL_FIELD,
 })
+
+export const CN_SECTION_KEYS = [
+  'probeConsent',
+  'disabledModelsCN',
+] as const satisfies readonly (keyof Config)[]
+
+export const AI_SECTION_KEYS = [
+  'useMaximumContextWindow',
+  'disabledModelsAI',
+] as const satisfies readonly (keyof Config)[]
+
+export const QUOTA_SECTION_KEYS = [
+  'sidebarQuotaCN',
+  'sidebarQuotaAI',
+  'autoCheckInCN',
+  'autoCheckInAI',
+  'checkInMinuteCN',
+  'checkInMinuteAI',
+  'quotaPollMs',
+] as const satisfies readonly (keyof Config)[]
+
+/** Copy the declared fields off one section's source, skipping absent ones. */
+function pickFields<K extends keyof Config>(
+  source: () => Config,
+  keys: readonly K[],
+): Partial<Config> {
+  const value = source()
+  const out: Partial<Config> = {}
+  for (const k of keys) {
+    const v = value[k]
+    if (v !== undefined) (out as Record<string, unknown>)[k] = v
+  }
+  return out
+}
 
 /** One variant's live runtime, assembled by {@link createVariantRuntime}. */
 interface VariantRuntime {
   variant: WorkBuddyVariant
   store: WorkBuddyCredentialStore
   client: WorkBuddyUpstreamClient
+  checkIn: (signal?: AbortSignal) => Promise<WorkBuddyCheckInResult>
   catalog: WorkBuddyCatalog
   probeStore: WorkBuddyProbeStore
   probeService: WorkBuddyProbeService
@@ -457,6 +526,7 @@ function createVariantRuntime(
   const savedCatalogs = new WorkBuddyCatalogStore(
     workbuddyCatalogPath(variant.catalogFilename),
   )
+  const checkInService = new WorkBuddyCheckInService()
   const probeService = new WorkBuddyProbeService({
     store: probeStore,
     catalog,
@@ -472,6 +542,10 @@ function createVariantRuntime(
     variant,
     store,
     client,
+    checkIn: async (signal?: AbortSignal) => {
+      const credential = await store.current()
+      return checkInService.checkIn(variant.id, credential, signal)
+    },
     catalog,
     probeStore,
     probeService,
@@ -665,6 +739,45 @@ export function apply(ctx: Context, config: Config): void {
     id => lastIdentities.get(id),
   ))
 
+  const checkInStore = new JsonFileCheckInStore()
+  const checkInScheduler = new CheckInScheduler({
+    targets: runtimes.map(runtime => ({
+      variantId: runtime.variant.id,
+      checkIn: (signal?: AbortSignal) => runtime.checkIn(signal),
+      minuteOfDay: () => {
+        const cfg = current()
+        const stored = runtime.variant.id === CN_VARIANT.id
+          ? cfg.checkInMinuteCN
+          : cfg.checkInMinuteAI
+        return normalizeCheckInMinute(stored ?? DEFAULT_CHECK_IN_MINUTE)
+      },
+      onClaimed: () => {
+        const cred = runtime.store.status()
+        void cred.then(status => {
+          if (status.state === 'signed-in') {
+            void runtime.store.current().then(c => {
+              if (c) void runtime.client.fetchCredits(c).catch(() => undefined)
+            })
+          }
+        })
+      },
+    })),
+    isEnabled: variantId => {
+      const cfg = current()
+      if (variantId === CN_VARIANT.id) return cfg.autoCheckInCN === true
+      return cfg.autoCheckInAI === true
+    },
+    store: checkInStore,
+  })
+  checkInScheduler.start()
+
+  let startupCatchUpDone = false
+  const runStartupCatchUpOnce = (): void => {
+    if (startupCatchUpDone) return
+    startupCatchUpDone = true
+    checkInScheduler.catchUp()
+  }
+
   // Same-origin routes backing each Plugin-configuration card; the webServer
   // service is optional (a headless profile serves no browser).
   const probeKey = createProbeKey()
@@ -774,6 +887,15 @@ export function apply(ctx: Context, config: Config): void {
         loginKey,
         ...runtime.variant.id === CN_VARIANT.id ? {} : { useMaximumContextWindow: () => current().useMaximumContextWindow === true },
         disabledModels: () => runtime.catalog.disabledModels(),
+        checkIn: () => {
+          const record = checkInStore.read(runtime.variant.id)
+          if (record === undefined) return undefined
+          const nextRunAt = checkInScheduler.nextRunAt(runtime.variant.id)
+          return {
+            ...record,
+            ...nextRunAt === undefined ? {} : { nextRunAt },
+          }
+        },
       })
       registerWorkBuddyLoginRoute(webCtx, {
         path: runtime.variant.loginPath,
@@ -898,6 +1020,30 @@ export function apply(ctx: Context, config: Config): void {
             ? { state: 'refreshed', reason: `${runtime.catalog.current().length} models` }
             : { state: 'failed', reason: runtime.catalogError }
         },
+        clearCheckInLogs: () => {
+          checkInStore.clearLogs(runtime.variant.id)
+        },
+        checkIn: async () => {
+          const result = await runtime.checkIn()
+          if (result.status !== 'error') {
+            checkInStore.write(runtime.variant.id, {
+              lastDate: result.date,
+              lastAt: result.timestamp,
+              status: result.status,
+              ...result.amount === undefined ? {} : { amount: result.amount },
+              ...result.message === undefined ? {} : { message: result.message },
+            })
+            if (result.status === 'claimed') {
+              const cred = await runtime.store.current()
+              if (cred) void runtime.client.fetchCredits(cred).catch(() => undefined)
+            }
+          }
+          return {
+            state: result.status,
+            ...result.amount === undefined ? {} : { amount: result.amount },
+            ...result.message === undefined ? {} : { reason: result.message },
+          }
+        },
         setDisabledModels: async disabled => {
           if (setDisabledModelsForVariant === undefined) return { state: 'failed', reason: 'settings are unavailable' }
           return setDisabledModelsForVariant(runtime.variant.id, disabled)
@@ -932,15 +1078,11 @@ export function apply(ctx: Context, config: Config): void {
       ai: () => config,
       quota: () => config,
     }
-    /** Merge both sections into the whole config the rest of the plugin reads. */
+    /** Merge all sections into the whole config the rest of the plugin reads. */
     const merged = (): Config => ({
-      ...sources.cn().probeConsent === undefined ? {} : { probeConsent: sources.cn().probeConsent },
-      ...sources.cn().disabledModelsCN === undefined ? {} : { disabledModelsCN: sources.cn().disabledModelsCN },
-      ...sources.ai().useMaximumContextWindow === undefined ? {} : { useMaximumContextWindow: sources.ai().useMaximumContextWindow },
-      ...sources.ai().disabledModelsAI === undefined ? {} : { disabledModelsAI: sources.ai().disabledModelsAI },
-      ...sources.quota().sidebarQuotaCN === undefined ? {} : { sidebarQuotaCN: sources.quota().sidebarQuotaCN },
-      ...sources.quota().sidebarQuotaAI === undefined ? {} : { sidebarQuotaAI: sources.quota().sidebarQuotaAI },
-      ...sources.quota().quotaPollMs === undefined ? {} : { quotaPollMs: sources.quota().quotaPollMs },
+      ...pickFields(sources.cn, CN_SECTION_KEYS),
+      ...pickFields(sources.ai, AI_SECTION_KEYS),
+      ...pickFields(sources.quota, QUOTA_SECTION_KEYS),
     })
     const applyMaximumContextWindow = (next: Config): void => {
       const runtime = runtimes.find(candidate => candidate.variant.id !== CN_VARIANT.id)
@@ -970,8 +1112,16 @@ export function apply(ctx: Context, config: Config): void {
       onChange: repointStores,
     })
     settingsCtx.settings.installSection(ctx, WORKBUDDY_QUOTA_SETTINGS_NS, QUOTA_SECTION, config, {
-      setSource(source) { sources.quota = source as () => Config; current = merged },
-      onChange: () => {},
+      setSource(source) {
+        sources.quota = source as () => Config
+        current = merged
+        checkInScheduler.rearm()
+        runStartupCatchUpOnce()
+      },
+      onChange: () => {
+        checkInScheduler.rearm()
+        void checkInScheduler.sweepAll(true)
+      },
     })
     setMaximumContextWindow = async enabled => {
       await settingsCtx.settings.update(WORKBUDDY_AI_SETTINGS_NS, { useMaximumContextWindow: enabled })
@@ -987,6 +1137,7 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.effect(() => () => {
     stopped = true
+    checkInScheduler.dispose()
     for (const timer of timers) clearInterval(timer)
     timers.length = 0
     void clearHostHeartbeat()

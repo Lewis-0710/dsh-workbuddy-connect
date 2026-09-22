@@ -51,6 +51,10 @@ export interface WorkBuddyProbeRouteOptions {
   setMaximumContextWindow?: (enabled: boolean) => Promise<{ state: string; reason?: string }>
   /** Persist and apply the disabled models preference. */
   setDisabledModels?: (disabledModels: readonly string[]) => Promise<{ state: string; reason?: string }>
+  /** Drop all stored check-in logs for this variant. */
+  clearCheckInLogs?: () => void
+  /** Trigger an immediate check-in attempt for this variant. */
+  checkIn?: () => Promise<{ state: string; reason?: string; amount?: number }>
   /**
    * Route path to mount. Defaults to the CN variant's path so existing callers
    * and tests keep their behaviour; the international variant passes its own.
@@ -104,6 +108,8 @@ function parseAction(text: string): WorkBuddyProbeAction | undefined {
   const wrapped = parsed as Record<string, unknown>
   const action = wrapped['action']
   if (action === 'clear') return { action: 'clear' }
+  if (action === 'clear-checkin-logs') return { action: 'clear-checkin-logs' }
+  if (action === 'checkin') return { action: 'checkin' }
   // No payload: the variant is already known from the route the request arrived
   // on, so the browser cannot ask this route to refresh a different provider.
   if (action === 'refresh') return { action: 'refresh' }
@@ -160,6 +166,19 @@ export function workBuddyProbeHandler(
       if (action.action === 'clear') {
         deps.clear()
         json(res, 200, { state: 'cleared' })
+        return
+      }
+      if (action.action === 'clear-checkin-logs') {
+        deps.clearCheckInLogs?.()
+        json(res, 200, { state: 'cleared' })
+        return
+      }
+      if (action.action === 'checkin') {
+        if (deps.checkIn === undefined) {
+          json(res, 404, { error: 'checkin-not-supported' })
+          return
+        }
+        json(res, 200, await deps.checkIn())
         return
       }
       if (action.action === 'refresh') {

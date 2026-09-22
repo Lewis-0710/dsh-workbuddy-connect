@@ -2,7 +2,7 @@
   "name": "dsh-workbuddy-connect",
   "displayName": "DSH WorkBuddy Connect",
   "description": "将 WorkBuddy（国内版/国际版）的模型接入 DeepSeek Harness — bring WorkBuddy models into DeepSeek Harness.",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "author": "corrinehu",
   "keywords": [
     "dsh-plugin",

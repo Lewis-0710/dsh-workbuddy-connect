@@ -49,6 +49,25 @@ export interface WorkBuddyStatusRouteOptions {
   /** Read the list of disabled model IDs for this variant. */
   disabledModels?: () => readonly string[]
   /**
+   * Daily check-in status provider for this variant.
+   */
+  checkIn?: () => {
+    lastDate: string
+    lastAt: number
+    status: 'claimed' | 'already-claimed' | 'no-campaign' | 'error'
+    amount?: number | undefined
+    message?: string | undefined
+    nextRunAt?: number | undefined
+    logs?: readonly {
+      id: string
+      date: string
+      timestamp: number
+      status: 'claimed' | 'already-claimed' | 'no-campaign' | 'error'
+      amount?: number | undefined
+      message?: string | undefined
+    }[] | undefined
+  } | undefined
+  /**
    * Route path to mount. Defaults to the CN variant's path so existing callers
    * and tests keep their behaviour; the international variant passes its own.
    */
@@ -167,12 +186,14 @@ export async function workBuddyWebStatus(
   // consent switches and results without a second request. The control key
   // travels with it: this response already passed the loopback guard, and the
   // key authorizes only probe control, never credentials or completions.
+  const checkInRecord = deps.checkIn?.()
   const probed: WorkBuddyWebStatus = {
     ...statusWithModels,
     ...deps.probe === undefined ? {} : { probe: deps.probe() },
     ...deps.probeKey === undefined ? {} : { probeKey: deps.probeKey },
     ...deps.useMaximumContextWindow === undefined ? {} : { useMaximumContextWindow: deps.useMaximumContextWindow() },
     ...deps.disabledModels === undefined ? {} : { disabledModels: deps.disabledModels() },
+    ...checkInRecord === undefined ? {} : { checkIn: checkInRecord },
   }
   try {
     const credential = await deps.store.current()

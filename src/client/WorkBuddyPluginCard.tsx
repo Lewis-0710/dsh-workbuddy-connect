@@ -938,6 +938,120 @@ function ProbeSection({ probe, t, onDetect, onClear, busy }: {
   )
 }
 
+function CheckInLogTable({
+  logs = [],
+  t,
+  onCheckIn,
+  onRefresh,
+  onClear,
+  busy,
+  checkingIn,
+  clearing,
+  disabled,
+  notice,
+  nextRun,
+}: {
+  logs?: readonly {
+    id: string
+    date: string
+    timestamp: number
+    status: string
+    amount?: number | undefined
+    message?: string | undefined
+  }[] | undefined
+  t: WorkBuddyPluginCardInjected['t']
+  onCheckIn?: () => void
+  onRefresh?: () => void
+  onClear?: () => void
+  busy?: boolean
+  checkingIn?: boolean
+  clearing?: boolean
+  disabled?: boolean
+  notice?: string | undefined
+  nextRun?: number | undefined
+}): React.ReactNode {
+  return (
+    <div style={quotaListStyle}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+        <h3 style={quotaTitleStyle}>{t('tabCheckIn')}</h3>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <button
+            type="button"
+            style={buttonStyle}
+            disabled={disabled || busy || checkingIn}
+            onClick={onCheckIn}
+          >
+            {checkingIn ? t('checkInChecking') : t('checkInNow')}
+          </button>
+          <button
+            type="button"
+            style={buttonStyle}
+            disabled={busy || checkingIn}
+            onClick={onRefresh}
+          >
+            {busy ? t('checkInRefreshing') : t('checkInRefresh')}
+          </button>
+          <button
+            type="button"
+            style={buttonStyle}
+            disabled={busy || clearing || !logs || logs.length === 0}
+            onClick={onClear}
+          >
+            {clearing ? t('checkInClearing') : t('checkInClear')}
+          </button>
+        </div>
+      </div>
+      {notice === undefined ? null : <p style={bodyStyle}>{notice}</p>}
+      {nextRun === undefined ? null : (
+        <p style={descriptionStyle}>{t('checkInNextRun', { time: formatTime(nextRun) })}</p>
+      )}
+      {!logs || logs.length === 0 ? (
+        <p style={descriptionStyle}>{t('checkInLogEmpty')}</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ display: 'flex', borderBottom: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.15))', paddingBottom: 6, fontSize: 12, color: 'var(--dsw-alias-label-tertiary)' }}>
+            <span style={{ flex: 2 }}>{t('checkInLogTime')}</span>
+            <span style={{ flex: 3 }}>{t('checkInLogResult')}</span>
+            <span style={{ flex: 1, textAlign: 'right' }}>{t('checkInLogAmount')}</span>
+          </div>
+          {logs.map(log => (
+            <div key={log.id} style={{ display: 'flex', alignItems: 'center', padding: '6px 0', fontSize: 13, borderBottom: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.08))' }}>
+              <span style={{ flex: 2, color: 'var(--dsw-alias-label-secondary)' }}>{formatTime(log.timestamp)}</span>
+              <span style={{ flex: 3, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  flexShrink: 0,
+                  background: log.status === 'claimed'
+                    ? 'var(--dsw-alias-status-success, #52c41a)'
+                    : log.status === 'already-claimed'
+                      ? 'var(--dsw-alias-status-info, #1890ff)'
+                      : log.status === 'no-campaign'
+                        ? 'var(--dsw-alias-label-tertiary, #999)'
+                        : 'var(--dsw-alias-status-error, #f5222d)',
+                }} />
+                <span>
+                  {log.status === 'claimed'
+                    ? t('autoCheckInStatusClaimed', { amount: log.amount ?? 100 })
+                    : log.status === 'already-claimed'
+                      ? t('autoCheckInStatusAlready')
+                      : log.status === 'no-campaign'
+                        ? t('autoCheckInStatusNoCampaign')
+                        : t('autoCheckInStatusError', { message: log.message ?? '' })}
+                </span>
+              </span>
+              <span style={{ flex: 1, textAlign: 'right', fontWeight: 600, color: log.amount ? 'var(--dsw-alias-brand-primary)' : 'inherit' }}>
+                {log.amount ? `+${log.amount}` : '-'}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** Render WorkBuddy sign-in state and credit as one expandable card. */
 export function WorkBuddyPluginCard(props: WorkBuddyPluginCardProps) {
   const { t, scope, signedIn, variant, unified } = props
@@ -1006,7 +1120,10 @@ export function WorkBuddyPluginCard(props: WorkBuddyPluginCardProps) {
   // carries; the two reference sets — context capacity, then rates and the
   // per-package breakdown — are deliberate visits, since neither changes while
   // you watch.
-  const [tab, setTab] = useState<'status' | 'context' | 'models' | 'details'>('status')
+  const [tab, setTab] = useState<'status' | 'context' | 'models' | 'details' | 'checkin'>('status')
+  const [checkingIn, setCheckingIn] = useState(false)
+  const [clearingLogs, setClearingLogs] = useState(false)
+  const [checkInNotice, setCheckInNotice] = useState<string>()
   const mounted = useRef(true)
   /**
    * Identity of the newest read that may write. Assigned when a read *starts*,
@@ -1242,6 +1359,76 @@ export function WorkBuddyPluginCard(props: WorkBuddyPluginCardProps) {
     } finally {
       manualControllers.current.delete(controller)
       if (mounted.current) setBusy(false)
+    }
+  }, [currentVariant.probePath, refresh, status, t, trackController])
+
+  const manualCheckIn = useCallback(async (): Promise<void> => {
+    const key = status?.status === 'signed-in' ? status.probeKey : undefined
+    if (key === undefined) return
+    setCheckingIn(true)
+    setCheckInNotice(undefined)
+    const controller = trackController()
+    try {
+      const response = await fetch(currentVariant.probePath, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Probe-Key': key },
+        credentials: 'same-origin',
+        signal: controller.signal,
+        body: JSON.stringify({ action: 'checkin' }),
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const result = await response.json() as { state?: string; amount?: number; reason?: string }
+      if (result.state === 'claimed') {
+        setCheckInNotice(t('autoCheckInStatusClaimed', { amount: result.amount ?? 100 }))
+      } else if (result.state === 'already-claimed') {
+        setCheckInNotice(t('autoCheckInStatusAlready'))
+      } else if (result.state === 'no-campaign') {
+        setCheckInNotice(t('autoCheckInStatusNoCampaign'))
+      } else if (result.reason) {
+        setCheckInNotice(t('autoCheckInStatusError', { message: result.reason }))
+      }
+    } catch (error: unknown) {
+      if (mounted.current && controller.signal.aborted !== true) {
+        setCheckInNotice(error instanceof Error ? error.message : t('requestFailed'))
+      }
+    } finally {
+      manualControllers.current.delete(controller)
+      if (mounted.current) setCheckingIn(false)
+    }
+    try {
+      await refresh(controller.signal)
+    } finally {
+      manualControllers.current.delete(controller)
+    }
+  }, [currentVariant.probePath, refresh, status, t, trackController])
+
+  const clearCheckInLogs = useCallback(async (): Promise<void> => {
+    const key = status?.status === 'signed-in' ? status.probeKey : undefined
+    if (key === undefined) return
+    setClearingLogs(true)
+    setCheckInNotice(undefined)
+    const controller = trackController()
+    try {
+      const response = await fetch(currentVariant.probePath, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Probe-Key': key },
+        credentials: 'same-origin',
+        signal: controller.signal,
+        body: JSON.stringify({ action: 'clear-checkin-logs' }),
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    } catch (error: unknown) {
+      if (mounted.current && controller.signal.aborted !== true) {
+        setCheckInNotice(error instanceof Error ? error.message : t('requestFailed'))
+      }
+    } finally {
+      manualControllers.current.delete(controller)
+      if (mounted.current) setClearingLogs(false)
+    }
+    try {
+      await refresh(controller.signal)
+    } finally {
+      manualControllers.current.delete(controller)
     }
   }, [currentVariant.probePath, refresh, status, t, trackController])
 
@@ -1690,7 +1877,7 @@ export function WorkBuddyPluginCard(props: WorkBuddyPluginCardProps) {
                     * decision-relevant.
                     */}
                   <div role="tablist" style={tabBarStyle}>
-                    {(['status', 'context', 'models', 'details'] as const).map(id => (
+                    {(['status', 'context', 'models', 'details', 'checkin'] as const).map(id => (
                       <button
                         key={id}
                         type="button"
@@ -1699,7 +1886,7 @@ export function WorkBuddyPluginCard(props: WorkBuddyPluginCardProps) {
                         onClick={() => { setTab(id) }}
                         style={{ ...tabStyle, ...(tab === id ? tabActiveStyle : {}) }}
                       >
-                        {t(id === 'status' ? 'tabStatus' : id === 'context' ? 'tabContext' : id === 'models' ? 'tabModels' : 'tabDetails')}
+                        {t(id === 'status' ? 'tabStatus' : id === 'context' ? 'tabContext' : id === 'models' ? 'tabModels' : id === 'details' ? 'tabDetails' : 'tabCheckIn')}
                       </button>
                     ))}
                   </div>
@@ -1766,7 +1953,7 @@ export function WorkBuddyPluginCard(props: WorkBuddyPluginCardProps) {
                         }}
                       />
                     </div>
-                  ) : (
+                  ) : tab === 'details' ? (
                     <div style={tabPanelStyle}>
                       {status.credits === undefined ? null : (
                         <div style={quotaListStyle}>
@@ -1793,6 +1980,22 @@ export function WorkBuddyPluginCard(props: WorkBuddyPluginCardProps) {
                             .map(model => <ModelOfferRow key={model.id} model={model} t={t} />)}
                         </div>
                       )}
+                    </div>
+                  ) : (
+                    <div style={tabPanelStyle}>
+                      <CheckInLogTable
+                        logs={status.checkIn?.logs}
+                        t={t}
+                        disabled={busy}
+                        busy={busy}
+                        checkingIn={checkingIn}
+                        clearing={clearingLogs}
+                        {...checkInNotice === undefined ? {} : { notice: checkInNotice }}
+                        {...status.checkIn?.nextRunAt === undefined ? {} : { nextRun: status.checkIn.nextRunAt }}
+                        onCheckIn={() => { void manualCheckIn() }}
+                        onRefresh={() => { void refresh() }}
+                        onClear={() => { void clearCheckInLogs() }}
+                      />
                     </div>
                   )}
                 </>

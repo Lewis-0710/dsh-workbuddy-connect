@@ -12,7 +12,7 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { workbuddyStateDir } from './paths.ts'
 import { WORKBUDDY_CONNECT_VERSION } from './version.ts'
@@ -53,6 +53,7 @@ export async function writeHostHeartbeat(): Promise<void> {
     pid: process.pid,
   }
   try {
+    await mkdir(workbuddyStateDir(), { recursive: true })
     await writeFile(workbuddyHostHeartbeatPath(), JSON.stringify(document), 'utf8')
   } catch {
     // Non-fatal: the CLI status will show "heartbeat missing".

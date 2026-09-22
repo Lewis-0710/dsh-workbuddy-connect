@@ -47,6 +47,10 @@ export interface QuotaSettingsCardInjected {
 export interface QuotaSection {
   sidebarQuotaCN?: boolean
   sidebarQuotaAI?: boolean
+  autoCheckInCN?: boolean
+  autoCheckInAI?: boolean
+  checkInMinuteCN?: number
+  checkInMinuteAI?: number
   quotaPollMs?: number
 }
 
@@ -55,25 +59,62 @@ export type QuotaSettingsCardProps =
   & Partial<QuotaSettingsCardInjected>
 
 /** The settings fields this card edits, in display order. */
-const FIELDS = ['sidebarQuotaCN', 'sidebarQuotaAI', 'quotaPollMs'] as const
+const FIELDS = [
+  'sidebarQuotaCN',
+  'sidebarQuotaAI',
+  'autoCheckInCN',
+  'checkInMinuteCN',
+  'autoCheckInAI',
+  'checkInMinuteAI',
+  'quotaPollMs',
+] as const
 type Field = (typeof FIELDS)[number]
 
 /** The default poll interval shown before a value is stored. */
 const POLL_DEFAULT_MS = 300_000
 /** Floor the schema also enforces; mirrored here for immediate UI feedback. */
 const POLL_MIN_MS = 60_000
+/** 10:00 UTC+8, the moment the upstream resets the daily campaign. */
+const CHECK_IN_MINUTE_DEFAULT = 600
+
+/** Minutes past midnight (UTC+8), split for the two number fields. */
+function splitMinutes(minutes: number): { hours: number; minutes: number } {
+  const safe = Number.isFinite(minutes) ? Math.trunc(minutes) : CHECK_IN_MINUTE_DEFAULT
+  const clamped = safe < 0 || safe > 1439 ? CHECK_IN_MINUTE_DEFAULT : safe
+  return { hours: Math.floor(clamped / 60), minutes: clamped % 60 }
+}
 
 /** Projection the card component reads. */
 interface QuotaSettingsProjection {
   status: 'loading' | 'ready' | 'unavailable'
   writable: boolean
-  values: { sidebarQuotaCN: boolean; sidebarQuotaAI: boolean; quotaPollMs: number }
+  values: {
+    sidebarQuotaCN: boolean
+    sidebarQuotaAI: boolean
+    autoCheckInCN: boolean
+    autoCheckInAI: boolean
+    checkInMinuteCN: number
+    checkInMinuteAI: number
+    quotaPollMs: number
+  }
 }
 
 /** Read the section values out of a scope snapshot (defaults when absent). */
 function project(scope: SettingsScope<QuotaSection> | undefined): QuotaSettingsProjection {
   if (scope === undefined) {
-    return { status: 'unavailable', writable: false, values: { sidebarQuotaCN: false, sidebarQuotaAI: false, quotaPollMs: POLL_DEFAULT_MS } }
+    return {
+      status: 'unavailable',
+      writable: false,
+      values: {
+        sidebarQuotaCN: false,
+        sidebarQuotaAI: false,
+        autoCheckInCN: false,
+        autoCheckInAI: false,
+        checkInMinuteCN: CHECK_IN_MINUTE_DEFAULT,
+        checkInMinuteAI: CHECK_IN_MINUTE_DEFAULT,
+        quotaPollMs: POLL_DEFAULT_MS,
+      },
+    }
   }
   const snapshot = scope.getSnapshot()
   const value = snapshot.value ?? {}
@@ -83,6 +124,10 @@ function project(scope: SettingsScope<QuotaSection> | undefined): QuotaSettingsP
     values: {
       sidebarQuotaCN: value.sidebarQuotaCN === true,
       sidebarQuotaAI: value.sidebarQuotaAI === true,
+      autoCheckInCN: value.autoCheckInCN === true,
+      autoCheckInAI: value.autoCheckInAI === true,
+      checkInMinuteCN: typeof value.checkInMinuteCN === 'number' ? value.checkInMinuteCN : CHECK_IN_MINUTE_DEFAULT,
+      checkInMinuteAI: typeof value.checkInMinuteAI === 'number' ? value.checkInMinuteAI : CHECK_IN_MINUTE_DEFAULT,
       quotaPollMs: typeof value.quotaPollMs === 'number' ? value.quotaPollMs : POLL_DEFAULT_MS,
     },
   }
@@ -105,7 +150,15 @@ let cachedProjection: QuotaSettingsProjection | undefined
 const UNAVAILABLE: QuotaSettingsProjection = {
   status: 'unavailable',
   writable: false,
-  values: { sidebarQuotaCN: false, sidebarQuotaAI: false, quotaPollMs: POLL_DEFAULT_MS },
+  values: {
+    sidebarQuotaCN: false,
+    sidebarQuotaAI: false,
+    autoCheckInCN: false,
+    autoCheckInAI: false,
+    checkInMinuteCN: CHECK_IN_MINUTE_DEFAULT,
+    checkInMinuteAI: CHECK_IN_MINUTE_DEFAULT,
+    quotaPollMs: POLL_DEFAULT_MS,
+  },
 }
 
 function stableProject(scope: SettingsScope<QuotaSection> | undefined): QuotaSettingsProjection {
@@ -118,6 +171,10 @@ function stableProject(scope: SettingsScope<QuotaSection> | undefined): QuotaSet
     cachedProjection.writable !== next.writable ||
     cachedProjection.values.sidebarQuotaCN !== next.values.sidebarQuotaCN ||
     cachedProjection.values.sidebarQuotaAI !== next.values.sidebarQuotaAI ||
+    cachedProjection.values.autoCheckInCN !== next.values.autoCheckInCN ||
+    cachedProjection.values.autoCheckInAI !== next.values.autoCheckInAI ||
+    cachedProjection.values.checkInMinuteCN !== next.values.checkInMinuteCN ||
+    cachedProjection.values.checkInMinuteAI !== next.values.checkInMinuteAI ||
     cachedProjection.values.quotaPollMs !== next.values.quotaPollMs
   ) {
     cachedScope = scope
@@ -165,6 +222,87 @@ function ToggleRow({ label, hint, checked, disabled, disabledHint, onToggle }: {
       >
         <span style={knobStyle} />
       </button>
+    </div>
+  )
+}
+
+/**
+ * One time row: the moment a variant checks in, as two typeable number fields.
+ */
+function TimeRow({ label, hint, value, disabled, onPick }: {
+  label: string
+  hint: string
+  value: number
+  disabled?: boolean
+  onPick: (minutes: number) => void
+}): React.ReactNode {
+  const split = splitMinutes(value)
+  const [hourDraft, setHourDraft] = useState(String(split.hours))
+  const [minuteDraft, setMinuteDraft] = useState(String(split.minutes).padStart(2, '0'))
+
+  useEffect(() => {
+    const next = splitMinutes(value)
+    setHourDraft(String(next.hours))
+    setMinuteDraft(String(next.minutes).padStart(2, '0'))
+  }, [value])
+
+  const commit = (): void => {
+    const parsedHours = Number.parseInt(hourDraft, 10)
+    const parsedMinutes = Number.parseInt(minuteDraft, 10)
+    const hours = Number.isFinite(parsedHours) ? Math.min(23, Math.max(0, parsedHours)) : split.hours
+    const minutes = Number.isFinite(parsedMinutes) ? Math.min(59, Math.max(0, parsedMinutes)) : split.minutes
+    const next = hours * 60 + minutes
+    if (next === value) {
+      setHourDraft(String(hours))
+      setMinuteDraft(String(minutes).padStart(2, '0'))
+      return
+    }
+    onPick(next)
+  }
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      commit()
+    }
+  }
+
+  return (
+    <div style={rowStyle}>
+      <div style={rowTextStyle}>
+        <span style={labelStyle}>{label}</span>
+        <span style={hintStyle}>{hint}</span>
+      </div>
+      <span style={pollFieldStyle}>
+        <input
+          type="number"
+          min={0}
+          max={23}
+          value={hourDraft}
+          disabled={disabled}
+          aria-label={`${label} — hour`}
+          data-checkin-part="hour"
+          onChange={event => { setHourDraft(event.target.value) }}
+          onBlur={commit}
+          onKeyDown={onKeyDown}
+          style={{ ...timePartStyle, opacity: disabled === true ? 0.45 : 1 }}
+        />
+        <span style={labelStyle}>:</span>
+        <input
+          type="number"
+          min={0}
+          max={59}
+          value={minuteDraft}
+          disabled={disabled}
+          aria-label={`${label} — minute`}
+          data-checkin-part="minute"
+          onChange={event => { setMinuteDraft(event.target.value) }}
+          onBlur={commit}
+          onKeyDown={onKeyDown}
+          style={{ ...timePartStyle, opacity: disabled === true ? 0.45 : 1 }}
+        />
+        <span style={hintStyle}>UTC+8</span>
+      </span>
     </div>
   )
 }
@@ -249,6 +387,8 @@ export function QuotaSettingsContent({ t = key => key, scope, signedIn }: QuotaS
     // no call path (including a direct onToggle(true)) can persist it.
     if (field === 'sidebarQuotaCN' && value === true && !signed.cn) return
     if (field === 'sidebarQuotaAI' && value === true && !signed.ai) return
+    if (field === 'autoCheckInCN' && value === true && !signed.cn) return
+    if (field === 'autoCheckInAI' && value === true && !signed.ai) return
     void scope?.set(field, value)
   }
   const minutes = Math.max(POLL_MIN_MS / 60_000, Math.round(projection.values.quotaPollMs / 60_000))
@@ -269,6 +409,36 @@ export function QuotaSettingsContent({ t = key => key, scope, signedIn }: QuotaS
         disabled={!signed.ai}
         disabledHint={t('quotaSignInRequired')}
         onToggle={next => write('sidebarQuotaAI', next)}
+      />
+      <ToggleRow
+        label={t('autoCheckInCN')}
+        hint={t('autoCheckInHintCN')}
+        checked={projection.values.autoCheckInCN}
+        disabled={!signed.cn}
+        disabledHint={t('quotaSignInRequired')}
+        onToggle={next => write('autoCheckInCN', next)}
+      />
+      <TimeRow
+        label={t('checkInTimeCN')}
+        hint={t('checkInTimeHint')}
+        value={projection.values.checkInMinuteCN}
+        disabled={!signed.cn}
+        onPick={next => write('checkInMinuteCN', next)}
+      />
+      <ToggleRow
+        label={t('autoCheckInAI')}
+        hint={t('autoCheckInHintAI')}
+        checked={projection.values.autoCheckInAI}
+        disabled={!signed.ai}
+        disabledHint={t('quotaSignInRequired')}
+        onToggle={next => write('autoCheckInAI', next)}
+      />
+      <TimeRow
+        label={t('checkInTimeAI')}
+        hint={t('checkInTimeHint')}
+        value={projection.values.checkInMinuteAI}
+        disabled={!signed.ai}
+        onPick={next => write('checkInMinuteAI', next)}
       />
       <div style={{ ...rowStyle, borderBottom: 'none', paddingBottom: 0 }}>
         <div style={rowTextStyle}>
@@ -456,6 +626,20 @@ const switchStyle: CSSProperties = {
 }
 const knobStyle: CSSProperties = { display: 'block', width: 16, height: 16, borderRadius: '50%', background: 'var(--dsw-alias-bg-layer-1, #fff)', boxShadow: '0 1px 2px rgba(0,0,0,0.2)' }
 const pollFieldStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, flex: 'none' }
+const timePartStyle: CSSProperties = {
+  boxSizing: 'border-box',
+  width: 56,
+  padding: '5px 8px',
+  borderWidth: '1px',
+  borderStyle: 'solid',
+  borderColor: 'var(--dsw-alias-border-l2)',
+  borderRadius: 8,
+  background: 'var(--dsw-alias-bg-layer-2)',
+  color: 'var(--dsw-alias-label-primary)',
+  font: 'inherit',
+  fontSize: 13,
+  textAlign: 'center',
+}
 const inputStyle: CSSProperties = {
   boxSizing: 'border-box',
   width: 55,
