@@ -42,7 +42,8 @@
     "cordis.patch.yml",
     "README.md",
     "README.en.md",
-    "LICENSE"
+    "LICENSE",
+    "assets"
   ],
   "license": "MIT",
   "repository": {
@@ -114,5 +115,6 @@
   },
   "dependencies": {
     "js-yaml": "^4.1.0"
-  }
+  },
+  "icon": "./assets/icon.svg"
 }
