@@ -310,7 +310,15 @@ interface WorkBuddyModelReasoning {
 type WorkBuddyEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 /** Billing convenience metadata reported for one model. */
 interface WorkBuddyModelBilling {
-  /** Credits multiplier, e.g. `"x0.00"` (free) or `"x0.79"`. */
+  /**
+   * Credits multiplier, e.g. `"x0.00"` (free) or `"x0.79"`.
+   *
+   * For a `rateUnknown` row this is the STALE value the upstream left behind:
+   * the ended promotion's discounted rate. It is kept so the settings card can
+   * show "x0.00（促销已过期）" — the user needs to know what the price was and
+   * that it lapsed — while every other surface (the model seat) reports the
+   * price as unavailable rather than repeating a figure that no longer holds.
+   */
   credits?: string;
   /** Promotional tags, e.g. `"限时免费"`, `"夜间折扣"`. */
   badges?: readonly string[];
@@ -324,9 +332,12 @@ interface WorkBuddyModelBilling {
    * cached rate describes a discount that has ended. The original price is not
    * recoverable from the row, so the plugin reports "unknown, refresh needed"
    * rather than repeating a figure it can no longer stand behind — in
-   * particular it never keeps claiming the model is free.
+   * particular it never keeps claiming the model is free. The lapsed value
+   * itself stays in `credits` for the settings card to show as expired.
    */
   rateUnknown?: boolean;
+  /** The promotion labels that lapsed, verbatim, when rateUnknown came from one. */
+  expiredPromotions?: readonly string[];
 }
 /** One billing package and its remaining credit. */
 interface WorkBuddyCreditAccount {
@@ -1459,6 +1470,15 @@ declare const WORKBUDDY_AI_SETTINGS_NS: SettingsNamespace;
  * that card render (see {@link WORKBUDDY_AI_SETTINGS_NS} for the mechanism).
  */
 declare const WORKBUDDY_QUOTA_SETTINGS_NS: SettingsNamespace;
+/**
+ * Plugin-owned settings endpoint consumed by its browser half.
+ *
+ * GET answers the whole entry configuration as three layers (value/base/user)
+ * plus the write key; POST applies one patch. This is the plugin's own settings
+ * surface, replacing writes through the host's settings service — see
+ * {@link ./settings-store.ts} for why.
+ */
+declare const WORKBUDDY_SETTINGS_FACE_PATH = "/plugins/dsh-workbuddy-connect/settings";
 /** Plugin configuration. */
 interface Config {
   /**
@@ -1518,4 +1538,4 @@ declare const QUOTA_SECTION_KEYS: readonly ["sidebarQuotaCN", "sidebarQuotaAI", 
  */
 declare function apply(ctx: Context, config: Config): void;
 //#endregion
-export { AI_SECTION_KEYS, AI_VARIANT, type AppVersionInfo, CN_APP_VERSION_FILENAME, CN_SECTION_KEYS, CN_VARIANT, type ChatIdentity, Config, FALLBACK_CN_APP_VERSION, FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS, LOGIN_PENDING_CODE, PROBE_EFFORT_CANDIDATES, type ProbeAttempt, type ProbeOutcome, type ProbeSender, QUOTA_POLL_DEFAULT_MS, QUOTA_POLL_MIN_MS, QUOTA_SECTION_KEYS, type ResolveChatIdentityOptions, type UpstreamErrorKind, WORKBUDDY_AI_LOGIN_PATH, WORKBUDDY_AI_SETTINGS_NS, WORKBUDDY_APP_VERSION_FILENAME, WORKBUDDY_AUTH_FILENAME, WORKBUDDY_CATALOG_FILENAME, WORKBUDDY_CREDENTIAL_SOURCE, WORKBUDDY_DATA_DIR_ENV, WORKBUDDY_DATA_DIR_NAME, WORKBUDDY_HOST_HEARTBEAT_FILENAME, WORKBUDDY_LOGIN_PATH, WORKBUDDY_PROBE_FILENAME, WORKBUDDY_PROVIDER, WORKBUDDY_QUOTA_SETTINGS_NS, WORKBUDDY_SETTINGS_NS, WORKBUDDY_STREAM_IDLE_TIMEOUT_MS, WORKBUDDY_VARIANTS, type WorkBuddyAdapter, type WorkBuddyAppVersionSource, type WorkBuddyAuthStatus, WorkBuddyCatalog, type WorkBuddyCatalogFetch, WorkBuddyCatalogStore, type WorkBuddyChatResult, type WorkBuddyCredential, WorkBuddyCredentialStore, type WorkBuddyCredits, type WorkBuddyEffort, type WorkBuddyHostHeartbeat, type WorkBuddyLoginAccount, type WorkBuddyLoginAttempt, WorkBuddyLoginClient, type WorkBuddyLoginPoll, type WorkBuddyLoginRouteOptions, type WorkBuddyLoginTokens, type WorkBuddyModelBilling, type WorkBuddyModelInfo, type WorkBuddyModelReasoning, type WorkBuddyProbeRecord, WorkBuddyProbeService, type WorkBuddyProbeStatus, WorkBuddyProbeStore, type WorkBuddyProbeValidation, type WorkBuddyPromotion, type WorkBuddyRefreshOutcome, type WorkBuddyShim, WorkBuddyUpstreamClient, type WorkBuddyUpstreamModel, type WorkBuddyVariant, type WorkBuddyWebLoginAction, type WorkBuddyWebLoginRequest, type WorkBuddyWebLoginResult, appUserAgent, apply, chatUserAgent, classifyUpstreamError, clearHostHeartbeat, createLoginKey, createWorkBuddyAdapter, createWorkBuddyShim, fallbackChatIdentity, fingerprintModel, inject, installedAppVersion, isHeartbeatProcessAlive, modelWithCurrentPromotion, name, normalizeCredits, normalizeLoginRegion, parseModelCatalog, parseWorkBuddyAuth, prepareChatBody, prepareInternationalChatBody, probeModel, processStartTimeMs, randomSentinel, readBundleVersion, readCliVersion, readHostHeartbeat, regionOf, registerWorkBuddyLoginRoute, resolveAppVersion, resolveChatIdentity, resolveLoginRegion, validAppVersion, validCliVersion, variantFor, workBuddyLoginHandler, workbuddyCatalogPath, workbuddyHostHeartbeatPath, workbuddyOwnAuthPath, workbuddyPluginDataDir, workbuddyProbePath };
+export { AI_SECTION_KEYS, AI_VARIANT, type AppVersionInfo, CN_APP_VERSION_FILENAME, CN_SECTION_KEYS, CN_VARIANT, type ChatIdentity, Config, FALLBACK_CN_APP_VERSION, FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS, LOGIN_PENDING_CODE, PROBE_EFFORT_CANDIDATES, type ProbeAttempt, type ProbeOutcome, type ProbeSender, QUOTA_POLL_DEFAULT_MS, QUOTA_POLL_MIN_MS, QUOTA_SECTION_KEYS, type ResolveChatIdentityOptions, type UpstreamErrorKind, WORKBUDDY_AI_LOGIN_PATH, WORKBUDDY_AI_SETTINGS_NS, WORKBUDDY_APP_VERSION_FILENAME, WORKBUDDY_AUTH_FILENAME, WORKBUDDY_CATALOG_FILENAME, WORKBUDDY_CREDENTIAL_SOURCE, WORKBUDDY_DATA_DIR_ENV, WORKBUDDY_DATA_DIR_NAME, WORKBUDDY_HOST_HEARTBEAT_FILENAME, WORKBUDDY_LOGIN_PATH, WORKBUDDY_PROBE_FILENAME, WORKBUDDY_PROVIDER, WORKBUDDY_QUOTA_SETTINGS_NS, WORKBUDDY_SETTINGS_FACE_PATH, WORKBUDDY_SETTINGS_NS, WORKBUDDY_STREAM_IDLE_TIMEOUT_MS, WORKBUDDY_VARIANTS, type WorkBuddyAdapter, type WorkBuddyAppVersionSource, type WorkBuddyAuthStatus, WorkBuddyCatalog, type WorkBuddyCatalogFetch, WorkBuddyCatalogStore, type WorkBuddyChatResult, type WorkBuddyCredential, WorkBuddyCredentialStore, type WorkBuddyCredits, type WorkBuddyEffort, type WorkBuddyHostHeartbeat, type WorkBuddyLoginAccount, type WorkBuddyLoginAttempt, WorkBuddyLoginClient, type WorkBuddyLoginPoll, type WorkBuddyLoginRouteOptions, type WorkBuddyLoginTokens, type WorkBuddyModelBilling, type WorkBuddyModelInfo, type WorkBuddyModelReasoning, type WorkBuddyProbeRecord, WorkBuddyProbeService, type WorkBuddyProbeStatus, WorkBuddyProbeStore, type WorkBuddyProbeValidation, type WorkBuddyPromotion, type WorkBuddyRefreshOutcome, type WorkBuddyShim, WorkBuddyUpstreamClient, type WorkBuddyUpstreamModel, type WorkBuddyVariant, type WorkBuddyWebLoginAction, type WorkBuddyWebLoginRequest, type WorkBuddyWebLoginResult, appUserAgent, apply, chatUserAgent, classifyUpstreamError, clearHostHeartbeat, createLoginKey, createWorkBuddyAdapter, createWorkBuddyShim, fallbackChatIdentity, fingerprintModel, inject, installedAppVersion, isHeartbeatProcessAlive, modelWithCurrentPromotion, name, normalizeCredits, normalizeLoginRegion, parseModelCatalog, parseWorkBuddyAuth, prepareChatBody, prepareInternationalChatBody, probeModel, processStartTimeMs, randomSentinel, readBundleVersion, readCliVersion, readHostHeartbeat, regionOf, registerWorkBuddyLoginRoute, resolveAppVersion, resolveChatIdentity, resolveLoginRegion, validAppVersion, validCliVersion, variantFor, workBuddyLoginHandler, workbuddyCatalogPath, workbuddyHostHeartbeatPath, workbuddyOwnAuthPath, workbuddyPluginDataDir, workbuddyProbePath };

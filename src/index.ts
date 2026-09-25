@@ -34,8 +34,10 @@ import type { WorkBuddyModelInfo } from './catalog.ts'
 import type { WorkBuddyWebCatalog, WorkBuddyWebProbeSection } from './status-paths.ts'
 import { clearHostHeartbeat, writeHostHeartbeat } from './host-heartbeat.ts'
 import { WORKBUDDY_CONNECT_VERSION } from './version.ts'
+import { WORKBUDDY_CONFIG_ENTRY_ID } from './config-entry.ts'
 import { CN_VARIANT, WORKBUDDY_VARIANTS, type WorkBuddyVariant } from './variants.ts'
 import { WorkBuddyCheckInService, type WorkBuddyCheckInResult } from './checkin.ts'
+import { SettingsStore, readLegacySections } from './settings-store.ts'
 import {
   CheckInScheduler,
   DEFAULT_CHECK_IN_MINUTE,
@@ -211,6 +213,16 @@ export const WORKBUDDY_AI_SETTINGS_NS = 'workbuddy-ai' as SettingsNamespace
 export const WORKBUDDY_QUOTA_SETTINGS_NS = 'workbuddy-quota' as SettingsNamespace
 
 /**
+ * Plugin-owned settings endpoint consumed by its browser half.
+ *
+ * GET answers the whole entry configuration as three layers (value/base/user)
+ * plus the write key; POST applies one patch. This is the plugin's own settings
+ * surface, replacing writes through the host's settings service — see
+ * {@link ./settings-store.ts} for why.
+ */
+export const WORKBUDDY_SETTINGS_FACE_PATH = '/plugins/dsh-workbuddy-connect/settings'
+
+/**
  * How often the credential files are re-checked, in milliseconds.
  *
  * A startup-only catalog fetch cannot notice a sign-in that happens while DSH
@@ -288,28 +300,95 @@ export interface Config {
   quotaPollMs?: number
 }
 
+/**
+ * Mark one user-editable configuration field as volatile — where the running
+ * schemastery knows what that means.
+ *
+ * DSH 0.1.7 projects a Config field into its settings form only when the field
+ * carries `meta.volatile`, and parses such a field into a stable reference the
+ * Host reads back through `.get()` (see {@link readField}). DSH 0.1.5's
+ * schemastery has no `volatile` method at all, so an unconditional call would
+ * throw a TypeError while this module is being imported and take the whole Host
+ * half down with it. The method is therefore probed per field and a schema
+ * without it is returned untouched: 0.1.5 keeps parsing and reading plain
+ * values, which is exactly its old behaviour.
+ *
+ * Each editable field is marked WHOLE (one top-level field, one fixed path):
+ * a volatile field may not enclose another, and the 0.1.7 client writes
+ * single-segment paths (`path: ['sidebarQuotaCN']`) that the Host validates
+ * against exactly this mark.
+ *
+ * @param field - the schemastery field to mark.
+ * @returns the volatile schema on 0.1.7, the same schema unchanged on 0.1.5.
+ */
+function volatileField<T>(field: T): T {
+  const candidate = field as { volatile?: () => T; extra?: (key: string, value: unknown) => T; meta?: Record<string, unknown> }
+  if (typeof candidate.volatile === 'function') return candidate.volatile()
+  if (typeof candidate.extra === 'function') return candidate.extra('volatile', true)
+  if (candidate && typeof candidate === 'object') {
+    candidate.meta = { ...candidate.meta, volatile: true }
+    return candidate as T
+  }
+  return field
+}
+
+/**
+ * Read one configuration field compatibly across both host lines.
+ *
+ * On 0.1.7 a field marked volatile is parsed into a `Volatile<T>` reference and
+ * MUST be read through `.get()` — the built-in plugins do exactly that
+ * (`dsh-agent-default-model`: `this.config.provider.get()`), and a raw read
+ * yields the reference object rather than the value. On 0.1.5 the same field is
+ * the plain value, so a raw read stays correct there. Every read of a volatile
+ * field goes through this one reader, which is what keeps a single code path
+ * correct on both lines.
+ *
+ * @param source - the configuration object (or section source) to read.
+ * @param field - the field name.
+ * @returns the field's value, or undefined when the source carries none.
+ */
+function readField<K extends keyof Config>(source: Config | undefined, field: K): Config[K] {
+  const value = (source as Record<string, unknown> | undefined)?.[field]
+  if (value !== null && typeof value === 'object' && typeof (value as { get?: unknown }).get === 'function') {
+    return (value as { get: () => Config[K] }).get()
+  }
+  return value as Config[K]
+}
+
+/**
+ * The seams one installed settings section reports through.
+ *
+ * `setSource` publishes the section's live reader (the Host scope once one
+ * exists, the composition entry otherwise), and `onChange` is called whenever
+ * that section's values move. Identical on both host lines that serve sections.
+ */
+interface SettingsSectionHooks {
+  setSource(source: () => Config): void
+  onChange(): void
+}
+
 /** Probe authorization (shared by the plugin schema and the CN section). */
-const PROBE_CONSENT_FIELD = z.boolean().default(false)
-  .description('Authorize reasoning-effort probes (each probe sends real requests that may consume credit)')
-const MAXIMUM_CONTEXT_WINDOW_FIELD = z.boolean().default(true)
-  .description('Use the largest context window declared by WorkBuddy AI when alternatives are available (on by default)')
-const DISABLED_MODELS_FIELD = z.array(z.string()).default([])
-  .description('Disabled model IDs for this variant (empty by default)')
+const PROBE_CONSENT_FIELD = volatileField(z.boolean().default(false)
+  .description('Authorize reasoning-effort probes (each probe sends real requests that may consume credit)'))
+const MAXIMUM_CONTEXT_WINDOW_FIELD = volatileField(z.boolean().default(true)
+  .description('Use the largest context window declared by WorkBuddy AI when alternatives are available (on by default)'))
+const DISABLED_MODELS_FIELD = volatileField(z.array(z.string()).default([])
+  .description('Disabled model IDs for this variant (empty by default)'))
 
 /** Sidebar quota toggle (one per variant; both live on the shared quota card). */
-const QUOTA_TOGGLE_FIELD = z.boolean().default(false)
-  .description('Show this variant’s remaining-credit card in the sidebar footer (off by default)')
+const QUOTA_TOGGLE_FIELD = volatileField(z.boolean().default(false)
+  .description('Show this variant’s remaining-credit card in the sidebar footer (off by default)'))
 /** Automatic check-in toggle. */
-const AUTO_CHECK_IN_FIELD = z.boolean().default(false)
-  .description('每天自动签到领取算力额度（默认关闭）')
+const AUTO_CHECK_IN_FIELD = volatileField(z.boolean().default(false)
+  .description('每天自动签到领取算力额度（默认关闭）'))
 /**
  * When a variant checks in, as minutes past midnight in UTC+8.
  */
-const CHECK_IN_MINUTE_FIELD = z.number()
+const CHECK_IN_MINUTE_FIELD = volatileField(z.number()
   .default(DEFAULT_CHECK_IN_MINUTE)
   .min(0)
   .max(1439)
-  .description('每日自动签到的时刻（自 UTC+8 午夜起的分钟数，600 = 10:00）')
+  .description('每日自动签到的时刻（自 UTC+8 午夜起的分钟数，600 = 10:00）'))
 /**
  * Quota poll interval: default 5 minutes, floor 1 minute. The status route
  * performs a live upstream billing call per request with no cache, so an
@@ -319,10 +398,10 @@ const CHECK_IN_MINUTE_FIELD = z.number()
  */
 export const QUOTA_POLL_DEFAULT_MS = 300_000
 export const QUOTA_POLL_MIN_MS = 60_000
-const QUOTA_POLL_FIELD = z.number()
+const QUOTA_POLL_FIELD = volatileField(z.number()
   .default(QUOTA_POLL_DEFAULT_MS)
   .min(QUOTA_POLL_MIN_MS)
-  .description('Sidebar quota card refresh interval in milliseconds (default 300000, minimum 60000)')
+  .description('Sidebar quota card refresh interval in milliseconds (default 300000, minimum 60000)'))
 
 export const Config: z<Config> = z.object({
   probeConsent: PROBE_CONSENT_FIELD,
@@ -395,6 +474,56 @@ export const QUOTA_SECTION_KEYS = [
   'quotaPollMs',
 ] as const satisfies readonly (keyof Config)[]
 
+/** Every declared configuration field, across all sections. */
+const CONFIG_KEYS = [
+  ...CN_SECTION_KEYS,
+  ...AI_SECTION_KEYS,
+  ...QUOTA_SECTION_KEYS,
+] as const satisfies readonly (keyof Config)[]
+
+/**
+ * The schema defaults, READ off each field's own `meta.default`.
+ *
+ * Two ways this was got wrong before, both silent and both destructive: a
+ * hand-written table drifted from the schema (so the schema's own defaults
+ * were classified as real overrides and the legacy settings document could
+ * never win), and `validate({})` was then tried instead — which on this
+ * schemastery answers with hollow `{}` per field instead of applying the
+ * defaults, which is worse than nothing because it looks like it worked.
+ * Walking `Config.dict` for `meta.default` is the only honest source: it is
+ * the value schemastery itself substituted during validation.
+ */
+const DEFAULT_FOR_FIELD: Partial<Record<keyof Config, unknown>> = (() => {
+  const out: Partial<Record<keyof Config, unknown>> = {}
+  try {
+    for (const [key, field] of Object.entries(Config.dict ?? {})) {
+      const fallback = (field as { meta?: { default?: unknown } } | undefined)?.meta?.default
+      if (fallback !== undefined) (out as Record<string, unknown>)[key] = fallback
+    }
+  } catch {
+    // An unreadable schema leaves the map partial: every field then reads as
+    // "no default", which keeps the entry authoritative — the pre-migration
+    // behaviour — rather than guessing.
+  }
+  if (Object.keys(out).length === 0) {
+    // A schema that cannot be walked keeps the literal table below.
+    return {
+      probeConsent: false,
+      useMaximumContextWindow: true,
+      disabledModelsCN: [],
+      disabledModelsAI: [],
+      sidebarQuotaCN: false,
+      sidebarQuotaAI: false,
+      autoCheckInCN: false,
+      autoCheckInAI: false,
+      checkInMinuteCN: 600,
+      checkInMinuteAI: 600,
+      quotaPollMs: 300_000,
+    }
+  }
+  return out
+})()
+
 /** Copy the declared fields off one section's source, skipping absent ones. */
 function pickFields<K extends keyof Config>(
   source: () => Config,
@@ -403,7 +532,9 @@ function pickFields<K extends keyof Config>(
   const value = source()
   const out: Partial<Config> = {}
   for (const k of keys) {
-    const v = value[k]
+    // Through `readField`: a section source is either the running Config
+    // (volatile references on 0.1.7) or a Host scope's resolved section.
+    const v = readField(value, k)
     if (v !== undefined) (out as Record<string, unknown>)[k] = v
   }
   return out
@@ -504,11 +635,20 @@ function createVariantRuntime(
   })
   const fallback = fallbackFor(variant)
   const catalog = new WorkBuddyCatalog(fallback)
+  // The initial preferences come from the caller's LIVE configuration view
+  // (`current()`), never the bare entry config: the plugin-owned settings file
+  // is the live source, and reading the entry here made every restart forget
+  // the disabled-model list — the entry is empty by then (its row was cleaned
+  // up), so the catalog came back "all models enabled" and the picker offered
+  // models the user had switched off.
+  const initial = current()
   if (variant.id !== CN_VARIANT.id) {
-    catalog.setUseMaximumContextWindow(config.useMaximumContextWindow === true)
-    if (config.disabledModelsAI !== undefined) catalog.setDisabledModels(config.disabledModelsAI)
+    catalog.setUseMaximumContextWindow(initial.useMaximumContextWindow === true)
+    const disabledAI = initial.disabledModelsAI
+    if (disabledAI !== undefined) catalog.setDisabledModels(disabledAI)
   } else {
-    if (config.disabledModelsCN !== undefined) catalog.setDisabledModels(config.disabledModelsCN)
+    const disabledCN = initial.disabledModelsCN
+    if (disabledCN !== undefined) catalog.setDisabledModels(disabledCN)
   }
   // Start hidden: a variant must serve no models until an account has actually
   // been adopted, so a signed-out variant is empty rather than showing a roster
@@ -532,7 +672,7 @@ function createVariantRuntime(
     catalog,
     credentials: store,
     client,
-    consent: () => current().probeConsent === true,
+    consent: () => readField(current(), 'probeConsent') === true,
     // Observations are per account: the service reads and writes its records
     // against this identity, so one account's detected levels never answer for
     // another's, and an in-flight sweep cannot store under a new account.
@@ -634,7 +774,7 @@ function probeSection(runtime: VariantRuntime, consent: boolean): WorkBuddyWebPr
  *
  * @returns whether the provider registered.
  */
-async function startVariant(ctx: Context, runtime: VariantRuntime): Promise<boolean> {
+async function startVariant(ctx: Context, runtime: VariantRuntime, seedCatalog: () => Promise<void>): Promise<boolean> {
   const { variant, store, client, catalog, probeService } = runtime
   const shim = createWorkBuddyShim({ store, client, catalog, logger: ctx.logger })
   try {
@@ -667,13 +807,36 @@ async function startVariant(ctx: Context, runtime: VariantRuntime): Promise<bool
     let releaseDirectory: (() => void) | undefined
     try {
       releaseAdapter = ctx.llm.registerAdapter([variant.id], workbuddy.adapter)
+      // The settings namespace the Models page resolves this directory row
+      // against differs by host line, and the difference is not cosmetic:
+      //
+      //  - 0.1.7 serves one settings form per profile ENTRY, keyed by
+      //    `entry.options.id` (dsh-settings `describe()`), so the row must name
+      //    that id — naming a 0.1.5 namespace (`workbuddy` / `workbuddy-ai`)
+      //    makes the page resolve a name the Host never served, and the row
+      //    renders with no configuration at all.
+      //  - 0.1.5 serves the namespaces this plugin installs, which is what
+      //    `settingsNamespaceFor` returns.
+      //
+      // `configEditor` exists only on 0.1.7, which is the same probe the write
+      // path and the migration use.
+      const host017 = ((): boolean => {
+        try {
+          const probe = ctx as unknown as { get?: (name: string) => unknown }
+          return probe.get?.('configEditor') !== undefined
+        } catch {
+          return false
+        }
+      })()
+      const entryId = (ctx as unknown as { fiber?: { entry?: { options?: { id?: string } } } }).fiber?.entry?.options?.id
+      const settingsNs = host017 && entryId !== undefined ? (entryId as SettingsNamespace) : settingsNamespaceFor(variant)
       releaseDirectory = ctx.llm.registerConfigurableProviders([{
         provider: variant.id,
         displayName: variant.displayName,
-        // Each variant's directory entry joins its own installed section; the
-        // Models settings page resolves `settingsNs` against the served
-        // namespaces, so a shared ns would render both providers onto one card.
-        settingsNs: settingsNamespaceFor(variant),
+        // Each variant's directory entry joins its own settings form; the
+        // Models settings page resolves `settingsNs` against the served forms,
+        // so the name must be the one THIS host serves (see above).
+        settingsNs,
         settingsPath: [],
         declared: false,
       }])
@@ -698,6 +861,13 @@ async function startVariant(ctx: Context, runtime: VariantRuntime): Promise<bool
       void shim.close()
     }
     runtime.registered = true
+    // Seed the catalog BEFORE returning, not in the later sweep: a 0.1.7
+    // settings write hot-reloads this fiber, and the card's post-write refresh
+    // must not land in the window where the fresh runtime's catalog is still
+    // hidden ("暂无可配置的模型" until the user presses refresh).
+    void (async () => {
+      try { await seedCatalog() } catch { /* contained: the sweep still seeds */ }
+    })()
     return true
   } catch (error: unknown) {
     ctx.logger.error(`dsh-workbuddy-connect: ${variant.displayName} provider registration failed`, error)
@@ -716,21 +886,384 @@ async function startVariant(ctx: Context, runtime: VariantRuntime): Promise<bool
  * out groups with no models), which keeps a sign-in that happens after startup
  * working without re-registering the provider.
  */
+/**
+ * State that MUST survive a fiber reload, module-level on purpose.
+ *
+ * DSH 0.1.7's configuration write (`configEditor.edit`) reconciles the profile
+ * tree, which hot-reloads the entry's fiber — `apply()` runs again with a fresh
+ * closure. Anything re-minted per apply is invalidated by every settings write:
+ * the browser cards hold the keys the status document handed them, so a
+ * per-apply key turns each write into a wave of 403s ("刷新失败"), and a
+ * per-apply identity map makes the sweep re-fetch the catalog from upstream on
+ * every write. Both are per-PROCESS secrets and caches, so they live here once.
+ */
+
+/** The in-process control keys, minted once per process. */
+let processKeys: { probe: string; login: string } | undefined
+function controlKeys(): { probe: string; login: string } {
+  processKeys ??= { probe: createProbeKey(), login: createLoginKey() }
+  return processKeys
+}
+
+/** The account identity each variant last published a catalog for, across reloads. */
+const lastIdentities = new Map<string, string>()
+
+/** The loopback guard the probe and status routes use, restated for settings. */
+function trustedSettingsRequest(req: { method?: string | undefined; headers: Record<string, string | string[] | undefined> }): boolean {
+  const host = req.headers.host ?? ''
+  const origin = req.headers.origin
+  if (!/^(localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d+)?$/i.test(String(host))) return false
+  return origin === undefined || /^https?:\/\/(localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d+)?$/i.test(String(origin))
+}
+
+/** JSON response helper for the settings face. */
+function jsonFace(res: { writeHead: (status: number, headers: Record<string, string>) => void; end: (body: string) => void }, status: number, body: unknown): void {
+  const payload = JSON.stringify(body)
+  res.writeHead(status, { 'Content-Type': 'application/json' })
+  res.end(payload)
+}
+
+/** Read the request body, or undefined when absent or oversized. */
+function readFaceBody(req: { on: (event: string, handler: (chunk?: unknown) => void) => void }): Promise<string | undefined> {
+  return new Promise(resolve => {
+    let body = ''
+    req.on('data', (chunk: unknown) => {
+      body += String(chunk)
+      if (body.length > 1e6) { resolve(undefined) }
+    })
+    req.on('end', () => resolve(body))
+    req.on('error', () => resolve(undefined))
+  })
+}
+
+/** Schema-level validation of one settings patch; the reason, or undefined. */
+function validateSettingsPatch(patch: Record<string, unknown>): string | undefined {
+  for (const [field, value] of Object.entries(patch)) {
+    if (!(CONFIG_KEYS as readonly string[]).includes(field)) return `unknown field ${field}`
+    if (value === null) continue
+    switch (field) {
+      case 'probeConsent':
+      case 'useMaximumContextWindow':
+      case 'sidebarQuotaCN':
+      case 'sidebarQuotaAI':
+      case 'autoCheckInCN':
+      case 'autoCheckInAI':
+        if (typeof value !== 'boolean') return `${field} must be a boolean`
+        break
+      case 'disabledModelsCN':
+      case 'disabledModelsAI':
+        if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) return `${field} must be an array of strings`
+        break
+      case 'checkInMinuteCN':
+      case 'checkInMinuteAI':
+        if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 1439) return `${field} must be an integer minute 0..1439`
+        break
+      case 'quotaPollMs':
+        if (typeof value !== 'number' || !Number.isInteger(value) || value < 60_000) return `${field} must be an integer of at least 60000 ms`
+        break
+    }
+  }
+  return undefined
+}
+
+/** One settings-face write: type-checked, then persisted and applied. */
+interface SettingsFaceTarget {
+  store: SettingsStore
+  current: () => Config
+  apply: (next: Config) => void
+  rearm: () => void
+}
+
+/**
+ * Register the settings face (GET/POST) the browser cards read and write
+ * through, answering the whole entry configuration as three layers.
+ *
+ * `value` carries every declared field, so the quota card sees the same merged
+ * view the host itself reads; `user` is the settings file exactly as stored
+ * (presence marks an override). A POST validates the fields it may touch,
+ * writes the file, applies the new view in memory, and re-arms the check-in
+ * scheduler (the old 0.1.5 section `onChange` behaviour).
+ */
+function registerSettingsFace(ctx: Context, deps: SettingsFaceTarget): void {
+  const { store, current, apply, rearm } = deps
+  const key = createProbeKey()
+  /** The document both routes answer with. */
+  const view = () => {
+    const merged = current()
+    const value: Record<string, unknown> = {}
+    const baseOut: Record<string, unknown> = {}
+    for (const field of CONFIG_KEYS) {
+      if (merged[field] !== undefined) value[field] = merged[field]
+      baseOut[field] = DEFAULT_FOR_FIELD[field]
+    }
+    return { key, value, base: baseOut, user: store.values() }
+  }
+  ctx.effect(() => {
+    const dispose = ctx.webServer.register({
+      kind: 'exact',
+      path: WORKBUDDY_SETTINGS_FACE_PATH,
+      handler: async (req, res) => {
+        if (!trustedSettingsRequest(req)) { jsonFace(res, 403, { error: 'request-not-trusted' }); return }
+        if (req.method === 'GET') { jsonFace(res, 200, view()); return }
+        if (req.method !== 'POST') { jsonFace(res, 405, { error: 'method not allowed' }); return }
+        if (req.headers['x-workbuddy-settings-key'] !== key) { jsonFace(res, 403, { error: 'invalid-key' }); return }
+        const body = await readFaceBody(req)
+        if (body === undefined) { jsonFace(res, 413, { error: 'body too large' }); return }
+        let patch: unknown
+        try { patch = JSON.parse(body || '{}') } catch { jsonFace(res, 400, { error: 'invalid json' }); return }
+        if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) {
+          jsonFace(res, 400, { error: 'invalid patch' }); return
+        }
+        const invalid = validateSettingsPatch(patch as Record<string, unknown>)
+        if (invalid !== undefined) { jsonFace(res, 400, { error: invalid }); return }
+        // A card write: the file holds live user edits from here on (see the
+        // seed rule on `apply`), so a stale profile row can never regress it.
+        store.patch(patch as Record<string, unknown>, true)
+        apply(current())
+        rearm()
+        jsonFace(res, 200, view())
+      },
+    })
+    return () => { dispose() }
+  }, 'dsh-workbuddy-connect: settings face')
+}
+
+/**
+ * Delete this plugin's own fields from the profile entry config, leaving every
+ * other key of the row untouched.
+ *
+ * One-time, right after the settings file has been seeded: the entry returns to
+ * its shipped state, so no second source of truth remains. Both write APIs are
+ * probed — `configEditor` (0.1.7) first, then the settings service's namespace
+ * `replace` (0.1.5), which rebuilds each of this plugin's three sections from
+ * the foreign keys alone.
+ *
+ * @param ctx - plugin context.
+ * @param ownKeys - this plugin's declared config fields.
+ * @param namespaces - the 0.1.5 section namespaces this plugin owns.
+ */
+/**
+ * When the profile tree last recomposed, module-level so every apply sees it.
+ *
+ * The legacy settings.yaml import writes the profile patch one section at a
+ * time for seconds after the Loader settles, emitting this event on every
+ * write. Cleaning up our row in that window is futile — the import's next
+ * section simply writes it back — so the cleanup waits for the tree to fall
+ * quiet first.
+ */
+let lastConfigReloadAt = Date.now()
+
+/** Wait until the profile tree has been quiet (the legacy import finished). */
+async function waitForProfileQuiet(): Promise<void> {
+  const deadline = Date.now() + 120_000
+  for (;;) {
+    if (Date.now() - lastConfigReloadAt >= 5_000) return
+    if (Date.now() >= deadline) return
+    await new Promise(resolve => setTimeout(resolve, 1_000))
+  }
+}
+
+async function cleanupEntryConfig(ctx: Context, ownKeys: readonly string[], namespaces: readonly string[]): Promise<void> {
+  // RETRIES, deliberately: `configEditor.edit` writes under the profile's
+  // package.json lock, and every plugin migrating on the same boot contends for
+  // that ONE lock — four sibling plugins seeding at once measured exactly one
+  // winner and three "timed out waiting for the writer lock" failures. The
+  // write is idempotent, so backing off (with jitter) makes the rest land.
+  const attempts = 10
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      // The legacy settings.yaml import writes this same profile patch, one
+      // section at a time, for seconds after the Loader settles — and it holds
+      // the very lock this cleanup needs, and rewrites our row while we watch.
+      // Wait for that write storm to end before the first attempt, then back
+      // off between retries.
+      if (attempt === 0) await waitForProfileQuiet()
+      else await new Promise(resolve => setTimeout(resolve, 2_000 + Math.random() * 1_000))
+      const probe = ctx as unknown as {
+        get?: (name: string) => unknown
+        fiber?: { entry?: unknown }
+      }
+      // configEditor 双路探测：本 ctx 直取（0.1.7 官方写法），失败再从 settings
+      // 服务的 ownerContext（宿主根 ctx，configEditor 挂在那里）取。
+      const own: unknown = typeof probe.get === 'function'
+        ? (() => { try { return probe.get.call(ctx, 'configEditor') as unknown } catch { return undefined } })()
+        : undefined
+      const editor = (own ?? await new Promise<unknown>(resolve => {
+        ctx.inject(['settings'], settingsCtx => {
+          const owner = (settingsCtx.settings as { ownerContext?: { get?: (name: string) => unknown } } | undefined)?.ownerContext
+          const viaOwner = typeof owner?.get === 'function'
+            ? (() => { try { return owner.get.call(owner, 'configEditor') as unknown } catch { return undefined } })()
+            : undefined
+          resolve(viaOwner)
+        })
+      })) as { edit(entry: unknown, change: (raw: Record<string, unknown>, inherited: Record<string, unknown>) => Record<string, unknown>): Promise<void> } | undefined
+      const entry = probe.fiber?.entry
+      if (editor !== undefined && entry !== undefined) {
+        // INHERITED 为基底 + 行内外来键：平台的组合校验
+        // （isDeepStrictEqual(next, inherited)）因此恒真，编辑器得以整块删除
+        // 用户层——手写空对象会在 bundle 层仍带 config 时校验失败。
+        // 其他插件/用户在该行上的键原样保留。
+        await editor.edit(entry, (raw, inherited) => {
+          const next: Record<string, unknown> = { ...(inherited ?? {}) }
+          for (const [key, value] of Object.entries(raw ?? {})) {
+            if ((ownKeys as readonly string[]).includes(key)) continue
+            if (!Object.hasOwn(next, key)) next[key] = value
+          }
+          return next
+        })
+        return
+      }
+      // 0.1.5: rebuild each namespace's user layer empty. Every one of this
+      // plugin's three sections is declared by this plugin alone (its schema IS
+      // the field list), so an empty section is exactly "our keys, nothing else".
+      await new Promise(resolve => {
+        ctx.inject(['settings'], settingsCtx => {
+          const settings = settingsCtx.settings as unknown as {
+            installSection?: unknown
+            replace?: (ns: string, section: Record<string, unknown>) => Promise<unknown>
+          }
+          if (typeof settings?.replace !== 'function' || typeof settings.installSection !== 'function') {
+            resolve(undefined)
+            return
+          }
+          Promise.all(namespaces.map(ns => Promise.resolve(settings.replace!(ns, {})).catch(() => undefined)))
+            .then(() => resolve(undefined))
+        })
+      })
+      return
+    } catch (error: unknown) {
+      if (attempt === attempts - 1) {
+        ctx.logger?.warn?.('dsh-workbuddy-connect: entry config cleanup failed', error)
+        return
+      }
+      await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1) + Math.random() * 500))
+    }
+  }
+}
+
+/**
+ * Start both variants: their loopback endpoints, the `workbuddy` and
+ * `workbuddy-ai` providers, their configuration cards, and their
+ * credential-driven catalog lifecycles.
+ *
+ * Each variant registers unconditionally; what varies is whether its catalog is
+ * *visible*. An empty catalog is how DSH hides a model group (the host filters
+ * out groups with no models), which keeps a sign-in that happens after startup
+ * working without re-registering the provider.
+ */
 export function apply(ctx: Context, config: Config): void {
-  // Live configuration source: starts as the applied config and is replaced by
-  // the settings section's source once one is installed, so edits reach the
-  // probe consent gate without a restart.
-  let current = (): Config => config
+  // 插件自有配置：唯一事实源（见 settings-store.ts）。
+  //
+  // Live configuration source: the composition entry (the profile row, read
+  // through the volatile indirection — on 0.1.7 every projected field is a
+  // reference object whose value comes from `.get()`) with the plugin-owned
+  // settings file layered on top.
+  //
+  // The entry stays as the fallback layer so a hand-edited profile row still
+  // seeds a fresh install; the file is where every write lands.
+  const store = new SettingsStore()
+  let current = (): Config => withOwnValues(config)
+
+  /**
+   * Overlay the plugin-owned settings file on the entry's config view.
+   *
+   * `readField` unwraps the volatile references 0.1.7 hands out, so this
+   * answers plain values on both host lines.
+   */
+  const withOwnValues = (base: Config): Config => {
+    const out = { ...base } as Record<string, unknown>
+    for (const key of CONFIG_KEYS) {
+      const value = readField(base, key)
+      if (value !== undefined) out[key] = value
+    }
+    for (const [key, value] of Object.entries(store.values())) {
+      if (key.startsWith('__')) continue
+      out[key] = value
+    }
+    return out as Config
+  }
+
+  /**
+   * One-time migration: per field — the file never held it → take the entry;
+   * the card HAS written this file → keep the file; the entry carries a
+   * NON-DEFAULT value → take the entry (the legacy settings.yaml import lands
+   * only after the Loader settles, i.e. after this plugin's first apply, and a
+   * seed taken inside that window can hold a stale or mis-encoded value); the
+   * entry only carries the schema default → keep the file.
+   *
+   * That last clause is load-bearing: a bundle layer's insert config does NOT
+   * reach the composition (verified with `dsh --dump-config`), so once the
+   * one-time cleanup has emptied the entry row the entry answers pure defaults —
+   * treating those as authoritative would erase the user's values on the next
+   * boot. Re-checked on every apply, which is also what closes the legacy
+   * import's timing window.
+   *
+   * When the entry is authoritative, its own fields are then deleted from the
+   * profile row, so no second source of truth remains.
+   */
+  const migrateOwnSettings = (): void => {
+    const legacy = readLegacySections([
+      WORKBUDDY_SETTINGS_NS as string,
+      WORKBUDDY_AI_SETTINGS_NS as string,
+      WORKBUDDY_QUOTA_SETTINGS_NS as string,
+    ])
+    const seeded: Record<string, unknown> = {}
+    for (const key of CONFIG_KEYS) {
+      const entryValue = readField(config, key)
+      const legacyValue = legacy === undefined ? undefined : legacy[key]
+      const holds = Object.hasOwn(store.user, key)
+      if (!holds) {
+        // First seed — the first NON-DEFAULT candidate, entry before legacy, and
+        // only then an explicit default so the stored layer stays complete. A
+        // schema default (an empty array, `true` for a toggle that defaults on)
+        // is NOT a value to seed on: seeding it here is what starved the legacy
+        // layer, whose document is the only surviving copy of this plugin's
+        // 0.1.5 settings.
+        if (entryValue !== undefined && JSON.stringify(entryValue) !== JSON.stringify(DEFAULT_FOR_FIELD[key])) seeded[key] = entryValue
+        else if (legacyValue !== undefined && JSON.stringify(legacyValue) !== JSON.stringify(DEFAULT_FOR_FIELD[key])) seeded[key] = legacyValue
+        else if (entryValue !== undefined) seeded[key] = entryValue
+        else if (legacyValue !== undefined) seeded[key] = legacyValue
+        continue
+      }
+      if (store.edited) continue
+      if (entryValue !== undefined && JSON.stringify(entryValue) !== JSON.stringify(DEFAULT_FOR_FIELD[key])) {
+        seeded[key] = entryValue
+        continue
+      }
+      if (legacyValue !== undefined && JSON.stringify(legacyValue) !== JSON.stringify(DEFAULT_FOR_FIELD[key])) {
+        seeded[key] = legacyValue
+      }
+    }
+    if (Object.keys(seeded).length === 0) return
+    store.patch(seeded)
+    void cleanupEntryConfig(ctx, CONFIG_KEYS, [
+      WORKBUDDY_SETTINGS_NS as string,
+      WORKBUDDY_AI_SETTINGS_NS as string,
+      WORKBUDDY_QUOTA_SETTINGS_NS as string,
+    ])
+  }
+  migrateOwnSettings()
+
+  // A volatile-only configuration change — which is what the legacy
+  // settings.yaml import performs, because every field of this Config is
+  // `.volatile()` — commits through the loader's volatile fast path: the
+  // references are updated IN PLACE and `apply()` is NOT run again. Seeding
+  // only inside `apply` would never observe values arriving that way. This
+  // event fires on exactly that commit (the same mechanism the built-in
+  // `dsh-llm-pi-ai` uses), so the seed rule re-evaluates.
+  // Both events are Host-internal channels the 0.1.5 typings do not declare, so
+  // they reach `on` through the string-keyed escape hatch rather than the typed
+  // event map.
+  const eventSink = ctx as unknown as { on: (event: string, listener: () => void) => void }
+  eventSink.on('loader/volatile-update', () => { migrateOwnSettings() })
+  // Every profile recomposition — including each section the legacy import
+  // writes — refreshes this stamp, which is what waitForProfileQuiet reads
+  // before cleaning our row up.
+  eventSink.on('app-boot/config-reload', () => { lastConfigReloadAt = Date.now() })
 
   /** Timers and in-flight work belonging to this plugin instance. */
   let stopped = false
   const timers: NodeJS.Timeout[] = []
-  /**
-   * The account identity each variant last published a catalog for. Keeps a
-   * same-identity token rotation from re-fetching, and lets a late response
-   * from a previous identity be discarded instead of overwriting a newer one.
-   */
-  const lastIdentities = new Map<string, string>()
 
   const runtimes = WORKBUDDY_VARIANTS.map(variant => createVariantRuntime(
     config,
@@ -746,9 +1279,10 @@ export function apply(ctx: Context, config: Config): void {
       checkIn: (signal?: AbortSignal) => runtime.checkIn(signal),
       minuteOfDay: () => {
         const cfg = current()
-        const stored = runtime.variant.id === CN_VARIANT.id
-          ? cfg.checkInMinuteCN
-          : cfg.checkInMinuteAI
+        const stored = readField(
+          cfg,
+          runtime.variant.id === CN_VARIANT.id ? 'checkInMinuteCN' : 'checkInMinuteAI',
+        )
         return normalizeCheckInMinute(stored ?? DEFAULT_CHECK_IN_MINUTE)
       },
       onClaimed: () => {
@@ -764,8 +1298,8 @@ export function apply(ctx: Context, config: Config): void {
     })),
     isEnabled: variantId => {
       const cfg = current()
-      if (variantId === CN_VARIANT.id) return cfg.autoCheckInCN === true
-      return cfg.autoCheckInAI === true
+      if (variantId === CN_VARIANT.id) return readField(cfg, 'autoCheckInCN') === true
+      return readField(cfg, 'autoCheckInAI') === true
     },
     store: checkInStore,
   })
@@ -780,17 +1314,9 @@ export function apply(ctx: Context, config: Config): void {
 
   // Same-origin routes backing each Plugin-configuration card; the webServer
   // service is optional (a headless profile serves no browser).
-  const probeKey = createProbeKey()
-  /**
-   * The in-process key authorizing sign-in writes, minted separately from the
-   * probe key.
-   *
-   * Separate keys rather than one shared secret because the two authorize
-   * different powers: one spends credit on a probe, the other obtains and stores
-   * a credential. A single key handed to both would let a defect in either card
-   * reach the other's authority.
-   */
-  const loginKey = createLoginKey()
+  // Keys are per-process (see {@link controlKeys}): a 0.1.7 settings write
+  // reloads this fiber, and per-apply keys would invalidate every card's key.
+  const { probe: probeKey, login: loginKey } = controlKeys()
   /** The device-authorization client; one instance serves both realms. */
   const loginClient = new WorkBuddyLoginClient()
   /**
@@ -826,7 +1352,16 @@ export function apply(ctx: Context, config: Config): void {
   const adoptIdentity = (runtime: VariantRuntime, identity: string | undefined): void => {
     const id = runtime.variant.id
     const known = lastIdentities.get(id)
-    if (known === identity) return
+    // "Same identity" may only short-circuit when THIS runtime has already
+    // adopted: a fresh catalog starts hidden (`createVariantRuntime` sets
+    // `visible=false`), and DSH 0.1.7's configuration write hot-reloads the
+    // fiber, so every settings write produces exactly such a fresh runtime.
+    // Short-circuiting on identity alone there skips the seeding AND the
+    // `setVisible(true)`, the provider registers with zero models, and the
+    // card's model list and context-window section go empty — and stay empty,
+    // because `all()` answers nothing while hidden even after a later fetch
+    // succeeds, and the refresh button routes through this same function.
+    if (known === identity && runtime.catalog.isVisible()) return
     const hadCredential = known !== undefined
     if (identity === undefined) lastIdentities.delete(id)
     else lastIdentities.set(id, identity)
@@ -882,10 +1417,10 @@ export function apply(ctx: Context, config: Config): void {
         client: runtime.client,
         models: () => runtime.catalog.all(),
         catalog: () => catalogSection(runtime),
-        probe: () => probeSection(runtime, current().probeConsent === true),
+        probe: () => probeSection(runtime, readField(current(), 'probeConsent') === true),
         probeKey,
         loginKey,
-        ...runtime.variant.id === CN_VARIANT.id ? {} : { useMaximumContextWindow: () => current().useMaximumContextWindow === true },
+        ...runtime.variant.id === CN_VARIANT.id ? {} : { useMaximumContextWindow: () => readField(current(), 'useMaximumContextWindow') === true },
         disabledModels: () => runtime.catalog.disabledModels(),
         checkIn: () => {
           const record = checkInStore.read(runtime.variant.id)
@@ -1056,81 +1591,80 @@ export function apply(ctx: Context, config: Config): void {
         },
       }, probeKey)
     }
+
+    // The settings face the browser cards read and write through. It answers
+    // the whole entry's configuration as three layers (value = effective,
+    // base = schema defaults, user = the settings file), which is exactly the
+    // shape the 0.1.7 configForm used to mirror — the client-side cards keep
+    // their staged-edit form untouched.
+    registerSettingsFace(webCtx, {
+      store, current,
+      apply: applyCatalogSettings,
+      rearm: () => { checkInScheduler.rearm(); runStartupCatchUpOnce() },
+    })
   })
 
 
-  // Each settings section is what makes its namespace "served" — which is how
-  // both the Plugins tab (card dispatch) and the Models settings page (provider
-  // directory join) find this plugin's halves. One section per card, because the
-  // tab renders a card by `entryKey = ns` and never interprets one: a section
-  // that is not installed leaves its card registered but undispatched, and a
-  // provider whose `settingsNs` names no section joins nothing.
+  // 两条宿主线共用一个写入口：插件自有文件（见 settings-store.ts）。
   //
-  // DSH 0.1.2 moved the helper from a free function (`installSettingsSection`)
-  // onto the provider service (`settings.installSection`), so the wiring now has
-  // to wait for a settings service to exist — exactly what the inject below
-  // does. Without one the plugin still serves its models; it simply has no
-  // user-editable sections, as before.
-  ctx.inject(['settings'], settingsCtx => {
-    /** Section sources; each falls back to its own slice when its side unloads. */
-    const sources: { cn: () => Config, ai: () => Config, quota: () => Config } = {
-      cn: () => config,
-      ai: () => config,
-      quota: () => config,
-    }
-    /** Merge all sections into the whole config the rest of the plugin reads. */
-    const merged = (): Config => ({
-      ...pickFields(sources.cn, CN_SECTION_KEYS),
-      ...pickFields(sources.ai, AI_SECTION_KEYS),
-      ...pickFields(sources.quota, QUOTA_SECTION_KEYS),
-    })
-    const applyMaximumContextWindow = (next: Config): void => {
-      const runtime = runtimes.find(candidate => candidate.variant.id !== CN_VARIANT.id)
-      if (runtime?.catalog.setUseMaximumContextWindow(next.useMaximumContextWindow === true)) runtime.invalidate()
-    }
-    const applyDisabledModels = (next: Config): void => {
-      for (const runtime of runtimes) {
-        const disabled = runtime.variant.id === CN_VARIANT.id
-          ? (next.disabledModelsCN ?? [])
-          : (next.disabledModelsAI ?? [])
-        if (runtime.catalog.setDisabledModels(disabled)) {
-          runtime.invalidate()
-        }
+  // 曾经这里按宿主形态分岔——0.1.5 用 `installSection` + `settings.update`
+  // （watch 回调原地生效、毫秒级），0.1.7 用 `configEditor.edit`（每次写入都
+  // reconcile 整棵 loader 树 + fiber 热重载，约 1~1.5 秒，并刷新所有客户端
+  // 镜像）。现在两侧都不再向宿主编程配置：写落自有 JSON 文件，随后原地
+  // apply（catalog 偏好、签到定时器重排、invalidate），0.1.5/0.1.7 行为一致。
+  //
+  // `configure({auto:false})` 保留：它只关掉宿主为这个 entry 自动生成的表单页
+  // （本插件自带卡片），与持久化通路无关。
+  /** Apply catalog preferences from a configuration view, in memory. */
+  const applyCatalogSettings = (next: Config): void => {
+    const aiRuntime = runtimes.find(candidate => candidate.variant.id !== CN_VARIANT.id)
+    if (aiRuntime?.catalog.setUseMaximumContextWindow(next.useMaximumContextWindow === true)) aiRuntime.invalidate()
+    for (const runtime of runtimes) {
+      const disabled = runtime.variant.id === CN_VARIANT.id
+        ? (next.disabledModelsCN ?? [])
+        : (next.disabledModelsAI ?? [])
+      if (runtime.catalog.setDisabledModels(disabled)) {
+        runtime.invalidate()
       }
     }
-    const repointStores = (): void => {
-      const next = merged()
-      applyMaximumContextWindow(next)
-      applyDisabledModels(next)
+  }
+
+  ctx.inject(['settings'], settingsCtx => {
+    const settings = settingsCtx.settings as unknown as {
+      configure?: (presentation: { auto?: boolean }, owner?: unknown) => unknown
     }
-    settingsCtx.settings.installSection(ctx, WORKBUDDY_SETTINGS_NS, CN_SECTION, config, {
-      setSource(source) { sources.cn = source as () => Config; current = merged },
-      onChange: repointStores,
-    })
-    settingsCtx.settings.installSection(ctx, WORKBUDDY_AI_SETTINGS_NS, AI_SECTION, config, {
-      setSource(source) { sources.ai = source as () => Config; current = merged },
-      onChange: repointStores,
-    })
-    settingsCtx.settings.installSection(ctx, WORKBUDDY_QUOTA_SETTINGS_NS, QUOTA_SECTION, config, {
-      setSource(source) {
-        sources.quota = source as () => Config
-        current = merged
-        checkInScheduler.rearm()
-        runStartupCatchUpOnce()
-      },
-      onChange: () => {
-        checkInScheduler.rearm()
-        void checkInScheduler.sweepAll(true)
-      },
-    })
+    if (typeof settings.configure === 'function') {
+      try {
+        settingsCtx.effect((): (() => void) => {
+          const dispose = settings.configure!({ auto: false }, ctx.fiber)
+          return typeof dispose === 'function' ? (dispose as () => void) : () => {}
+        })
+      } catch (error: unknown) {
+        console.error('[dsh-workbuddy-connect] settings.configure failed (own settings file still serves):', error)
+      }
+    }
+
+    /**
+     * The two setters, now one implementation on both hosts: write the
+     * plugin-owned settings file, then apply the new view in memory. No
+     * profile-patch write means no tree reconcile, no fiber reload, and no
+     * client-mirror storm per toggle.
+     */
+    const write = (patch: Record<string, unknown>): void => {
+      // A card-originated write (every caller here is a user action on the
+      // settings card), so the file becomes authoritative from this point on.
+      store.patch(patch, true)
+      applyCatalogSettings(current())
+      checkInScheduler.rearm()
+      runStartupCatchUpOnce()
+    }
     setMaximumContextWindow = async enabled => {
-      await settingsCtx.settings.update(WORKBUDDY_AI_SETTINGS_NS, { useMaximumContextWindow: enabled })
+      write({ useMaximumContextWindow: enabled })
       return { state: 'updated' }
     }
     setDisabledModelsForVariant = async (variantId, disabled) => {
-      const ns = variantId === CN_VARIANT.id ? WORKBUDDY_SETTINGS_NS : WORKBUDDY_AI_SETTINGS_NS
       const key = variantId === CN_VARIANT.id ? 'disabledModelsCN' : 'disabledModelsAI'
-      await settingsCtx.settings.update(ns, { [key]: [...disabled] })
+      write({ [key]: [...disabled] })
       return { state: 'updated' }
     }
   })
@@ -1291,7 +1825,25 @@ export function apply(ctx: Context, config: Config): void {
     for (const runtime of runtimes) await syncVariant(runtime)
   }
 
-  void Promise.all(runtimes.map(async runtime => startVariant(ctx, runtime))).then(() => {
+  void Promise.all(runtimes.map(async runtime => startVariant(ctx, runtime, async () => {
+    // The immediate seed: adopt whatever credential is in effect right now, so
+    // a reloaded fiber never serves an empty catalog while the sweep catches up.
+    // (A 0.1.7 settings write hot-reloads this fiber; the fresh runtime's
+    // catalog starts hidden, and the card's post-write refresh would otherwise
+    // land in that window and show "暂无可配置的模型".)
+    if (stopped) return
+    let credential
+    try {
+      credential = await runtime.store.current()
+    } catch {
+      return
+    }
+    if (credential === undefined) return
+    const identity = credentialIdentity(credential)
+    if (lastIdentities.get(runtime.variant.id) !== identity || !runtime.catalog.isVisible()) {
+      adoptIdentity(runtime, identity)
+    }
+  }))).then(() => {
     if (stopped) return
     // The host bundle is live: write a heartbeat so the status CLI can report
     // host health without a browser. Cleared on disposal; a stale heartbeat

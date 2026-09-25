@@ -19,11 +19,11 @@
 import { useSyncExternalStore, useState, useEffect, useCallback } from 'react'
 import type { CSSProperties } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import type { WorkBuddySettingsKey } from './locales.ts'
 import { isWorkBuddyWebStatus } from './status-document.ts'
 import { noteQuotaSignIn, onQuotaSettingsChange, quotaSignInState, quotaStatus, variantOfStatusPath } from './quota-settings-store.ts'
+import type { SettingsScope } from './quota-settings-store.ts'
 import { WORKBUDDY_AI_STATUS_PATH, WORKBUDDY_STATUS_PATH } from '../status-paths.ts'
 
 /** Everything the registration binds into the card. */

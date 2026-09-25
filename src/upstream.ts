@@ -83,7 +83,15 @@ export type WorkBuddyEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 /** Billing convenience metadata reported for one model. */
 export interface WorkBuddyModelBilling {
-  /** Credits multiplier, e.g. `"x0.00"` (free) or `"x0.79"`. */
+  /**
+   * Credits multiplier, e.g. `"x0.00"` (free) or `"x0.79"`.
+   *
+   * For a `rateUnknown` row this is the STALE value the upstream left behind:
+   * the ended promotion's discounted rate. It is kept so the settings card can
+   * show "x0.00（促销已过期）" — the user needs to know what the price was and
+   * that it lapsed — while every other surface (the model seat) reports the
+   * price as unavailable rather than repeating a figure that no longer holds.
+   */
   credits?: string
   /** Promotional tags, e.g. `"限时免费"`, `"夜间折扣"`. */
   badges?: readonly string[]
@@ -97,9 +105,12 @@ export interface WorkBuddyModelBilling {
    * cached rate describes a discount that has ended. The original price is not
    * recoverable from the row, so the plugin reports "unknown, refresh needed"
    * rather than repeating a figure it can no longer stand behind — in
-   * particular it never keeps claiming the model is free.
+   * particular it never keeps claiming the model is free. The lapsed value
+   * itself stays in `credits` for the settings card to show as expired.
    */
   rateUnknown?: boolean
+  /** The promotion labels that lapsed, verbatim, when rateUnknown came from one. */
+  expiredPromotions?: readonly string[]
 }
 
 /** One billing package and its remaining credit. */
@@ -1410,11 +1421,19 @@ export function modelWithCurrentPromotion(model: WorkBuddyUpstreamModel, now = D
       || (model.billing?.badges?.length ?? 0) > 0
       || model.promotions.some(candidate => candidate.factor !== 1)
     if (!derivedFromPromotion) return model
+    // The lapsed rate is KEPT in `credits` so the settings card can show it with
+    // an "expired" note — the user needs to know what the price was — while
+    // `rateUnknown` keeps every other surface from quoting it as current. The
+    // promotion's own badge label rides along for the same reason.
+    const staleRate = normalizeCredits(model.billing?.credits)
+    const expiredLabels = [...new Set(model.promotions.map(candidate => candidate.label).filter((label): label is string => label !== undefined && label !== ''))]
     return {
       ...model,
       billing: {
         free: false,
         rateUnknown: true,
+        ...staleRate === undefined ? {} : { credits: staleRate },
+        ...expiredLabels.length === 0 ? {} : { expiredPromotions: expiredLabels },
       },
     }
   }

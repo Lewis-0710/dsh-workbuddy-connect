@@ -142,6 +142,10 @@ export async function workBuddyWebStatus(
   const modelsField: readonly WorkBuddyWebModelBadge[] = models
     .map(model => {
       const rate = normalizeCredits(model.billing?.credits)
+      // The lapsed rate and its promotion labels, for a row whose promotion has
+      // ended: they travel under the expired note, never as a live price.
+      const staleRate = model.billing?.rateUnknown === true ? normalizeCredits(model.billing.credits) : undefined
+      const expiredLabels = [...new Set((model.billing?.expiredPromotions ?? []).filter(label => label !== ''))]
       // The largest window the upstream declares for this model, when it
       // declares alternatives; equal to `contextWindow` otherwise, and omitted
       // when the upstream said nothing.
@@ -153,12 +157,20 @@ export async function workBuddyWebStatus(
         name: model.name,
         ...model.billing?.free === true ? { free: true as const } : {},
         ...model.billing?.badges !== undefined && model.billing.badges.length > 0 ? { badges: model.billing.badges } : {},
-        ...rate === undefined ? {} : { credits: rate },
         // The rate is deliberately withheld for a row whose price cannot be
         // vouched for (a promotion that has ended but is still baked into the
         // cached row): the card then says the price needs a refresh instead of
-        // repeating a stale figure or implying the model is free.
-        ...model.billing?.rateUnknown === true ? { rateUnknown: true as const } : {},
+        // repeating a stale figure or implying the model is free. What it DOES
+        // get is the lapsed figure under an "expired" note — the user needs to
+        // know the price was x0.00 and that the promotion ran out, which is
+        // strictly more useful than a bare "unavailable".
+        ...model.billing?.rateUnknown === true
+          ? {
+              rateUnknown: true as const,
+              ...staleRate === undefined ? {} : { expiredCredits: staleRate },
+              ...expiredLabels.length === 0 ? {} : { expiredPromotions: expiredLabels },
+            }
+          : rate === undefined ? {} : { credits: rate },
         // Verbatim from the upstream catalog; omitted when it said nothing.
         ...typeof model.contextWindow === 'number' && model.contextWindow > 0
           ? { contextWindow: model.contextWindow }

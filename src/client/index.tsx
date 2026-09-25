@@ -4,7 +4,10 @@ import { useEffect } from 'react'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-import type {} from '@deepseek-ai/dsh-client-ui-slots'
+// Side-effect type import: this package carries the `settings.section` SlotMap
+// contract (the shared 《插件设置》 container registers into it on 0.1.7).
+import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import type { PropsRenderSlots, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-model-selection/client'
@@ -13,17 +16,19 @@ import { WorkBuddyProbeControl } from './WorkBuddyProbeControl.tsx'
 import { CARD_VARIANTS, WorkBuddyPluginCard } from './WorkBuddyPluginCard.tsx'
 import type { WorkBuddyPluginCardInjected } from './WorkBuddyPluginCard.tsx'
 import type { QuotaSection } from './QuotaSettingsCard.tsx'
+import { OwnQuotaSettingsScope } from './http-settings-scope.ts'
 import { QuotaDashboard, SidebarQuotaCard } from './SidebarQuotaCard.tsx'
 import type { QuotaDashboardInjected, QuotaDashboardState, QuotaDashboardProps, QuotaCopyKey, SidebarQuotaCardInjected, SidebarQuotaCardProps } from './SidebarQuotaCard.tsx'
 import { injectQuotaCss } from './quota-styles.ts'
 import './quota-slots.ts'
 import { setQuotaPollMs, setQuotaToggles, quotaSignInState, quotaPollMs, noteQuotaStatus, quotaStatusIsFresh, variantOfStatusPath } from './quota-settings-store.ts'
+import type { SettingsScope } from './quota-settings-store.ts'
 import { isWorkBuddyWebStatus } from './status-document.ts'
 import { en, zh } from './locales.ts'
 import type { WorkBuddySettingsKey } from './locales.ts'
+import { WORKBUDDY_CONFIG_ENTRY_ID } from '../config-entry.ts'
 import { WORKBUDDY_AI_STATUS_PATH, WORKBUDDY_STATUS_PATH } from '../status-paths.ts'
 import type { WorkBuddyWebStatus } from '../status-paths.ts'
-import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
 
 /** The dashboard face's props are bound directly; no extra key props are needed. */
 
@@ -49,12 +54,69 @@ export const name = 'dsh-workbuddy-connect-client'
  * declared by `@deepseek-ai/dsh-client-ui-settings-plugins`. All three are
  * named in the package's `dsh.client.inject` list, so cordis has activated
  * them before this plugin's fiber starts.
+ *
+ * The CONFIGURATION service is deliberately NOT here. DSH 0.1.5 provided
+ * `settingsScope` and 0.1.7 removed it, so naming it statically left this whole
+ * client plugin pending forever on 0.1.7 ("waiting for service:
+ * settingsScope") — no card, no sidebar quota card, no dashboard. Both lines'
+ * configuration services are reached through `ctx.inject([...], cb)` service
+ * callbacks inside `apply()` instead: a callback whose service never appears
+ * simply never runs, while the plugin itself activates normally.
  */
 // `modelDirectories` reads the active session through `remote.session`.
 // Declaring that dependency at the client entry is required by the Desktop
 // renderer; without it Cordis rejects `directoryFor()` before this bundle can
 // finish registering its contributions.
-export const inject = ['slots', 'locale', 'remote', 'remote.session', 'settingsScope']
+export const inject = ['slots', 'locale', 'remote', 'remote.session']
+
+/**
+ * This plugin's package name.
+ *
+ * Used as the entry `id` inside the shared 《插件设置》 block: the three connect
+ * plugins share one container, and the container requires a distinct `id` per
+ * contribution, so the package name is the one identifier guaranteed unique.
+ */
+const PACKAGE_NAME = 'dsh-workbuddy-connect'
+
+/**
+ * The settings namespace the 0.1.5 configuration face is bound BY.
+ *
+ * Two different keys reach the same section, one per host line, and they must
+ * not be mixed up:
+ *  - 0.1.5 binds a scope by NAMESPACE (`settingsScope.bind({ namespace })`),
+ *    and this is the Host half's own `workbuddy-quota` namespace (its
+ *    `WORKBUDDY_QUOTA_SETTINGS_NS`), registered by `installSection`;
+ *  - 0.1.7 addresses the profile ENTRY that owns the Config schema
+ *    (`configForms.get(entryId)` — see `WORKBUDDY_CONFIG_ENTRY_ID`), where a
+ *    settings namespace no longer exists at all.
+ */
+const QUOTA_SETTINGS_NAMESPACE = 'workbuddy-quota'
+
+/**
+ * The shared 《插件设置》 container the three connect plugins agree on: slot
+ * `settings.section`, entry id `plugin-settings`, child slot
+ * `plugin-settings.item`. The id and the child slot name must stay identical
+ * across the three plugins — a mismatch would produce two half-empty blocks,
+ * or a container whose child slot nobody declared.
+ */
+const PLUGIN_SETTINGS_SECTION_ID = 'plugin-settings'
+const PLUGIN_SETTINGS_ITEM_SLOT = 'plugin-settings.item'
+
+/**
+ * The container component of the shared 《插件设置》 block.
+ *
+ * It owns no content of its own: every attached plugin registers a card into
+ * the child slot this entry declares, and the container renders them. Only the
+ * plugin that wins the container registration mounts this; a plugin that lost
+ * the race registers into the winner's container and never mounts it.
+ */
+function PluginSettingsSection(props: PropsRuntime<'settings.section'> & PropsRenderSlots<'plugin-settings.item'>): React.ReactNode {
+  return (
+    <ul style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 0, listStyle: 'none' }}>
+      {props.renderSlot(PLUGIN_SETTINGS_ITEM_SLOT, {})}
+    </ul>
+  )
+}
 
 /** The settings namespaces each variant's card and section use (host-side constants, mirrored for paths). */
 const VARIANT_STATUS: Record<string, string> = {
@@ -95,19 +157,19 @@ export function apply(ctx: ClientContext): void {
     // longer registered separately — it now lives inside the unified
     // WorkBuddy card below (see `unified: true`), which keeps one owner for
     // the sign-in gate instead of two cards that could disagree.
-    // Bind the quota namespace AT BOOT, not when the settings card's inject
-    // factory first runs: the factory only executes while the settings page
-    // renders, so a fresh page load read no toggles and rendered no sidebar
-    // card until the user opened settings — the exact regression the
-    // commandcode card avoids by reading its STORED fact independently of the
-    // settings page. The scope subscription mirrors every accepted snapshot
-    // (toggles + interval) into the shared store the sidebar cards and the
-    // dashboard read; a deployment without the settings scope skips binding.
+    // The quota namespace is adopted as soon as the running host's
+    // configuration service appears (see the two probes below), NOT when the
+    // settings card's inject factory first runs: the factory only executes
+    // while the settings page renders, so a fresh page load read no toggles and
+    // rendered no sidebar card until the user opened settings — the exact
+    // regression the commandcode card avoids by reading its STORED fact
+    // independently of the settings page. The scope subscription mirrors every
+    // accepted snapshot (toggles + interval) into the shared store the sidebar
+    // cards and the dashboard read; a deployment with neither configuration
+    // service skips binding, and the plugin keeps serving models.
     let quotaScope: SettingsScope<QuotaSection> | undefined
-    try {
-      const scope = (ctx as unknown as {
-        settingsScope: { bind: (options: { namespace: string }) => SettingsScope<QuotaSection> }
-      }).settingsScope.bind({ namespace: 'workbuddy-quota' })
+    const adoptQuotaScope = (scope: SettingsScope<QuotaSection> | undefined): void => {
+      if (scope === undefined) return
       quotaScope = scope
       const applySnapshot = (): void => {
         const value = scope.getSnapshot().value
@@ -116,28 +178,108 @@ export function apply(ctx: ClientContext): void {
       }
       applySnapshot()
       scope.subscribe(applySnapshot)
-    } catch (error: unknown) {
-      console.error('[dsh-workbuddy-connect] quota settings scope unavailable (sidebar cards stay hidden):', error)
     }
 
-    // 2. ONE unified card: the sidebar quota settings at the top, then a
-    // segmented tab per variant (国内版 / 国际版). It keeps the seat the
-    // quota-settings card held — the Plugins tab dispatches
-    // `settings.plugin.item` in priority-ascending order (measured: lower
-    // priority renders first), so 10 puts WorkBuddy ahead of the sibling
-    // connect plugins' bands.
-    ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
-      name: 'settings.plugin.item',
-      key: 'workbuddy',
-      priority: 10,
-      inject: (): WorkBuddyPluginCardInjected => ({
-        t,
-        scope: quotaScope,
-        // Read live at render: the sign-in state changes without a remount.
-        signedIn: () => quotaSignInState(),
-        unified: true,
-      }),
-    }, WorkBuddyPluginCard))
+    // 2. The configuration face, one branch per host line. Both are service
+    // CALLBACKS — never a static injection, and never a bare property probe:
+    //  - a static `inject` entry naming a service the host does not provide
+    //    leaves this whole client plugin pending forever (0.1.7 removed
+    //    `settingsScope`, which is exactly the "waiting for service" hang);
+    //  - package-level `dsh.client.inject` edges are loading/prefetch metadata,
+    //    never apply sequencing, so probing `ctx.settingsScope` /
+    //    `ctx.configForms` at apply time can run before the provider registered
+    //    its service and misread the host as having no configuration surface.
+    // A callback whose service never appears simply never runs, so the two
+    // branches are mutually exclusive (0.1.5 provides `settingsScope`, 0.1.7
+    // `configForms`) and each owns the card seat its own host can render.
+    // 插件自有配置（`<profile>/.dsh-workbuddy-connect/settings.json`）：两条宿主
+    // 线的读写都走宿主半的 settings face，不再经过 settingsScope /
+    // configForms。0.1.7 的 configForms 写入会整树 reconcile + fiber 热重载
+    // （每次约 1~1.5 秒，且每次保存都刷新所有客户端镜像）；自有文件写入是本地
+    // 毫秒级原子写。scope 启动即载入，卡片注册无条件进行。
+    const ownQuotaScope = new OwnQuotaSettingsScope()
+    void ownQuotaScope.load().catch(() => {})
+    adoptQuotaScope(ownQuotaScope as never)
+    try {
+      registerPluginSettings()
+    } catch (error: unknown) {
+      console.error('[dsh-workbuddy-connect] plugin settings block registration failed (host provider unaffected):', error)
+    }
+    try {
+      ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
+        name: 'settings.plugin.item',
+        key: 'workbuddy',
+        priority: 10,
+        inject: (): WorkBuddyPluginCardInjected => ({
+          t,
+          scope: quotaScope,
+          // Read live at render: the sign-in state changes without a remount.
+          signedIn: () => quotaSignInState(),
+          unified: true,
+        }),
+      }, WorkBuddyPluginCard))
+    } catch (error: unknown) {
+      console.error('[dsh-workbuddy-connect] plugin card registration failed (host provider unaffected):', error)
+    }
+
+    /**
+     * Register this plugin's seat in the shared 《插件设置》 block.
+     *
+     * `settings.section` is a list slot owned by the settings shell, and a
+     * slot's CHILDREN are declared exactly once, by one entry — so three
+     * plugins cannot each create "their" block. They agree on one container
+     * instead: entry id `plugin-settings`, which declares the child slot
+     * `plugin-settings.item`, and each plugin contributes one card into that
+     * child with its own package name as the entry id. The protocol:
+     *
+     * 1. wait for the shell to declare `settings.section`;
+     * 2. probe whether a sibling already registered the `plugin-settings` entry;
+     * 3. if so, attach this plugin's card to the sibling's container;
+     * 4. otherwise register the container (which declares the child slot) and
+     *    then attach to it — losing that race throws, and the loser takes
+     *    step 3.
+     */
+    function registerPluginSettings(): void {
+      const registerItem = (): (() => void) => ctx.slots.register({
+        name: PLUGIN_SETTINGS_ITEM_SLOT,
+        id: PACKAGE_NAME,
+        // 《插件设置》卡片统一排位（列表按 order 升序渲染）：
+        // session-prompt 10 / workbuddy 20 / qoder 30。
+        order: 20,
+        inject: (): WorkBuddyPluginCardInjected => ({
+          t,
+          scope: quotaScope,
+          signedIn: () => quotaSignInState(),
+          unified: true,
+        }),
+      }, WorkBuddyPluginCard)
+      // The callback returns its disposers: `slots.inject` owns them for the
+      // declaration's lifetime, so the container and this plugin's card are
+      // torn down together when the shell collapses `settings.section`.
+      ctx.slots.inject('settings.section', () => {
+        const taken = ctx.slots.entries('settings.section')
+          .some(entry => entry.options?.id === PLUGIN_SETTINGS_SECTION_ID)
+        if (taken) return registerItem()
+        try {
+          const disposeContainer = ctx.slots.register({
+            name: 'settings.section',
+            id: PLUGIN_SETTINGS_SECTION_ID,
+            // The shell orders these sections itself; 900 keeps the shared
+            // block at the end, where the connect plugins' cards used to sit.
+            order: 900,
+            // The shared block's nav label. Only the winner's label is ever
+            // shown, and the three plugins register the same text.
+            label: () => '插件设置',
+            children: { [PLUGIN_SETTINGS_ITEM_SLOT]: { kind: 'list', scope: 'root' } },
+          }, PluginSettingsSection)
+          return [disposeContainer, registerItem()]
+        } catch {
+          // A sibling registered the container between the probe and this
+          // call: its child slot is declared, so attach to it instead.
+          return registerItem()
+        }
+      })
+    }
 
     // Sidebar quota cards + the dashboard they open. Two registrations, one
     // navigation entry — commandcode's pattern: the layout's keyed `main` slot

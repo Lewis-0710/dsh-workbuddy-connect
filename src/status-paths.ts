@@ -207,9 +207,19 @@ export interface WorkBuddyWebModelBadge {
    * Set for a row whose price came from a promotion that has since ended: the
    * upstream bakes the discounted value into the cached row, and the original
    * price is not recoverable from it, so neither the old figure nor `free` may
-   * be repeated. The card renders "refresh to see the price" instead.
+   * be repeated as current. The card renders "price unavailable" instead — and
+   * shows {@link expiredCredits} next to an "expired" note so the user still
+   * learns what the price was.
    */
   rateUnknown?: true
+  /**
+   * The lapsed rate, in display form, when rateUnknown came from an ended
+   * promotion (`"x0.00"` for a free trial that ran out). Rendered ONLY with the
+   * expired note — never as the model's current price.
+   */
+  expiredCredits?: string
+  /** The promotion labels that lapsed, verbatim (e.g. `限时免费`). */
+  expiredPromotions?: readonly string[]
   /**
    * Context capacity in tokens, taken verbatim from the upstream
    * `maxAllowedSize`/`maxInputTokens`, or from the international document's

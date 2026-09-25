@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { CSSProperties, ReactElement } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import { WORKBUDDY_AI_LOGIN_PATH, WORKBUDDY_AI_PROBE_PATH, WORKBUDDY_AI_STATUS_PATH, WORKBUDDY_LOGIN_PATH, WORKBUDDY_PROBE_PATH, WORKBUDDY_STATUS_PATH } from '../status-paths.ts'
 import type { WorkBuddyWebModelBadge, WorkBuddyWebProbeSection, WorkBuddyWebStatus } from '../status-paths.ts'
@@ -17,6 +16,7 @@ import {
   onQuotaSettingsChange,
   quotaSignInState,
 } from './quota-settings-store.ts'
+import type { SettingsScope } from './quota-settings-store.ts'
 
 /** The two variant ids the unified card switches between. */
 type WorkBuddyVariantId = 'workbuddy' | 'workbuddy-ai'
@@ -528,10 +528,16 @@ function ModelOfferRow({ model, t }: {
         </span>
       </div>
       {model.credits === undefined
-        // No rate to show. When the plugin withheld it because the price came
-        // from an ended promotion, say so plainly rather than showing nothing —
-        // silence here reads as "free", which is the claim being avoided.
-        ? model.rateUnknown === true ? <span style={modelRateStyle}>{t('rateUnknown')}</span> : null
+        // No LIVE rate to show. When the plugin withheld it because the price
+        // came from an ended promotion, show the lapsed figure with an expired
+        // note — the user learns what the price was and why it is gone, instead
+        // of a bare "unavailable" that explains nothing. Silence would read as
+        // "free", which is exactly the claim being avoided.
+        ? model.rateUnknown === true
+          ? <span style={modelRateStyle}>{model.expiredCredits === undefined
+              ? t('rateUnknown')
+              : t('rateExpired', { rate: model.expiredCredits, promo: modelBadgeLabel(model.expiredPromotions?.[0] ?? '', t) })}</span>
+          : null
         : <span style={modelRateStyle}>{t('rate', { rate: model.credits })}</span>}
     </div>
   )
@@ -771,7 +777,12 @@ function ModelTogglesSection({ models, disabledModels = [], t, disabled, onToggl
                   {model.credits !== undefined ? (
                     <span style={modelRateStyle}>{t('rate', { rate: model.credits })}</span>
                   ) : model.rateUnknown === true ? (
-                    <span style={modelRateStyle}>{t('rateUnknown')}</span>
+                    // An lapsed promotion's figure with an expired note — never
+                    // a silent gap, which would read as "free". The promo label
+                    // goes through the same localizer the live badges use.
+                    <span style={modelRateStyle}>{model.expiredCredits === undefined
+                      ? t('rateUnknown')
+                      : t('rateExpired', { rate: model.expiredCredits, promo: modelBadgeLabel(model.expiredPromotions?.[0] ?? '', t) })}</span>
                   ) : null}
                 </div>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: disabled ? 'default' : 'pointer', flexShrink: 0 }}>

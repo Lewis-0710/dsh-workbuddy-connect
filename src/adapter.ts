@@ -73,6 +73,15 @@ const NO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const
 const RATE_SEPARATOR = ' · '
 
 /**
+ * What the model seat shows in place of a missing rate.
+ *
+ * The seat has no locale service (the adapter is a host seam), and the plugin's
+ * own dictionaries live on the browser half, so this is a literal. It matches
+ * the settings card's own wording for the same state.
+ */
+const RATE_UNAVAILABLE = '价格暂不可用'
+
+/**
  * Append the billing rate to one model's display name.
  *
  * The rate AND the declared promo badges ride the *name* alone: since DSH
@@ -95,8 +104,16 @@ const RATE_SEPARATOR = ' · '
  * The badge labels are the upstream's own spellings and the host seam has no
  * locale service, so non-Chinese UIs see them verbatim — accepted until the
  * picker grows a localized badge slot.
+ *
+ * A price the plugin cannot stand behind renders as WORDS, never as an empty
+ * slot: every other model in the seat shows `· x0.3`, so a bare name where the
+ * rate should be reads as a rendering bug (and invites "why is this one
+ * blank?"). `rateUnknown` means exactly that case — the upstream baked an ended
+ * promotion's discount into the row, so the original is not recoverable and the
+ * honest answer is to say so.
  */
 function displaySuffix(info: WorkBuddyModelInfo): string | undefined {
+  if (info.billing?.rateUnknown === true) return RATE_UNAVAILABLE
   const parts = [
     normalizeCredits(info.billing?.credits),
     ...(info.billing?.badges ?? []),
