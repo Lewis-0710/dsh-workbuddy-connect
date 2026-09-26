@@ -1,0 +1,619 @@
+diff --git a/lib/bin.js b/lib/bin.js
+index 11d717d..c202bbd 100755
+--- a/lib/bin.js
++++ b/lib/bin.js
+@@ -1,5 +1,5 @@
+ #!/usr/bin/env node
+-import { C as resolveLoginRegion, E as WorkBuddyCredentialStore, Q as resolveAppVersion, T as WORKBUDDY_CREDENTIAL_SOURCE, f as WORKBUDDY_CONNECT_VERSION, i as variantFor, k as WorkBuddyUpstreamClient, l as readHostHeartbeat, m as FALLBACK_WORKBUDDY_MODELS, n as CN_VARIANT, p as FALLBACK_WORKBUDDY_AI_MODELS, r as WORKBUDDY_VARIANTS, s as isHeartbeatProcessAlive, u as workbuddyHostHeartbeatPath, x as WorkBuddyLoginClient } from "./variants-BnZhFBG7.js";
++import { C as resolveLoginRegion, E as WorkBuddyCredentialStore, Q as resolveAppVersion, T as WORKBUDDY_CREDENTIAL_SOURCE, f as WORKBUDDY_CONNECT_VERSION, i as variantFor, k as WorkBuddyUpstreamClient, l as readHostHeartbeat, m as FALLBACK_WORKBUDDY_MODELS, n as CN_VARIANT, p as FALLBACK_WORKBUDDY_AI_MODELS, r as WORKBUDDY_VARIANTS, s as isHeartbeatProcessAlive, u as workbuddyHostHeartbeatPath, x as WorkBuddyLoginClient } from "./variants-B7B2j1m-.js";
+ import { readFile } from "node:fs/promises";
+ import { realpathSync } from "node:fs";
+ import { fileURLToPath } from "node:url";
+diff --git a/lib/client.js b/lib/client.js
+index aeef15f..6577c85 100644
+--- a/lib/client.js
++++ b/lib/client.js
+@@ -4505,43 +4505,6 @@ window.__ModuleLoader__.load({
+ 			"remote",
+ 			"remote.session"
+ 		];
+-		/**
+-		* This plugin's package name.
+-		*
+-		* Used as the entry `id` inside the shared 《插件设置》 block: the three connect
+-		* plugins share one container, and the container requires a distinct `id` per
+-		* contribution, so the package name is the one identifier guaranteed unique.
+-		*/
+-		const PACKAGE_NAME = "dsh-workbuddy-connect";
+-		/**
+-		* The shared 《插件设置》 container the three connect plugins agree on: slot
+-		* `settings.section`, entry id `plugin-settings`, child slot
+-		* `plugin-settings.item`. The id and the child slot name must stay identical
+-		* across the three plugins — a mismatch would produce two half-empty blocks,
+-		* or a container whose child slot nobody declared.
+-		*/
+-		const PLUGIN_SETTINGS_SECTION_ID = "plugin-settings";
+-		const PLUGIN_SETTINGS_ITEM_SLOT = "plugin-settings.item";
+-		/**
+-		* The container component of the shared 《插件设置》 block.
+-		*
+-		* It owns no content of its own: every attached plugin registers a card into
+-		* the child slot this entry declares, and the container renders them. Only the
+-		* plugin that wins the container registration mounts this; a plugin that lost
+-		* the race registers into the winner's container and never mounts it.
+-		*/
+-		function PluginSettingsSection(props) {
+-			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("ul", {
+-				style: {
+-					display: "flex",
+-					flexDirection: "column",
+-					gap: 6,
+-					padding: 0,
+-					listStyle: "none"
+-				},
+-				children: props.renderSlot(PLUGIN_SETTINGS_ITEM_SLOT, {})
+-			});
+-		}
+ 		/** The settings namespaces each variant's card and section use (host-side constants, mirrored for paths). */
+ 		const VARIANT_STATUS = {
+ 			workbuddy: WORKBUDDY_STATUS_PATH,
+@@ -4593,11 +4556,6 @@ window.__ModuleLoader__.load({
+ 				const ownQuotaScope = new OwnQuotaSettingsScope();
+ 				ownQuotaScope.load().catch(() => {});
+ 				adoptQuotaScope(ownQuotaScope);
+-				try {
+-					registerPluginSettings();
+-				} catch (error) {
+-					console.error("[dsh-workbuddy-connect] plugin settings block registration failed (host provider unaffected):", error);
+-				}
+ 				try {
+ 					ctx.slots.inject("settings.plugin.item", () => ctx.slots.register({
+ 						name: "settings.plugin.item",
+@@ -4613,53 +4571,6 @@ window.__ModuleLoader__.load({
+ 				} catch (error) {
+ 					console.error("[dsh-workbuddy-connect] plugin card registration failed (host provider unaffected):", error);
+ 				}
+-				/**
+-				* Register this plugin's seat in the shared 《插件设置》 block.
+-				*
+-				* `settings.section` is a list slot owned by the settings shell, and a
+-				* slot's CHILDREN are declared exactly once, by one entry — so three
+-				* plugins cannot each create "their" block. They agree on one container
+-				* instead: entry id `plugin-settings`, which declares the child slot
+-				* `plugin-settings.item`, and each plugin contributes one card into that
+-				* child with its own package name as the entry id. The protocol:
+-				*
+-				* 1. wait for the shell to declare `settings.section`;
+-				* 2. probe whether a sibling already registered the `plugin-settings` entry;
+-				* 3. if so, attach this plugin's card to the sibling's container;
+-				* 4. otherwise register the container (which declares the child slot) and
+-				*    then attach to it — losing that race throws, and the loser takes
+-				*    step 3.
+-				*/
+-				function registerPluginSettings() {
+-					const registerItem = () => ctx.slots.register({
+-						name: PLUGIN_SETTINGS_ITEM_SLOT,
+-						id: PACKAGE_NAME,
+-						order: 20,
+-						inject: () => ({
+-							t,
+-							scope: quotaScope,
+-							signedIn: () => quotaSignInState(),
+-							unified: true
+-						})
+-					}, WorkBuddyPluginCard);
+-					ctx.slots.inject("settings.section", () => {
+-						if (ctx.slots.entries("settings.section").some((entry) => entry.options?.id === PLUGIN_SETTINGS_SECTION_ID)) return registerItem();
+-						try {
+-							return [ctx.slots.register({
+-								name: "settings.section",
+-								id: PLUGIN_SETTINGS_SECTION_ID,
+-								order: 900,
+-								label: () => "插件设置",
+-								children: { [PLUGIN_SETTINGS_ITEM_SLOT]: {
+-									kind: "list",
+-									scope: "root"
+-								} }
+-							}, PluginSettingsSection), registerItem()];
+-						} catch {
+-							return registerItem();
+-						}
+-					});
+-				}
+ 				const QUOTA_PANEL_ID = "workbuddy-quota-panel";
+ 				const CONVERSATION_PANEL_ID = "conversation";
+ 				const dashboardDocuments = {
+diff --git a/lib/index.d.ts b/lib/index.d.ts
+index 754d6da..3421f72 100644
+--- a/lib/index.d.ts
++++ b/lib/index.d.ts
+@@ -1433,8 +1433,8 @@ declare function isHeartbeatProcessAlive(heartbeat: WorkBuddyHostHeartbeat): boo
+ //#region src/index.d.ts
+ /** Stable Cordis plugin name. */
+ declare const name = "llm-workbuddy";
+-/** The model registry required before the provider can register. */
+-declare const inject: string[];
++/** The model registry and settings services required by this plugin. */
++declare const inject: readonly ["llm", "settings"];
+ /**
+  * Settings namespace owning the CN card's section.
+  *
+diff --git a/lib/index.js b/lib/index.js
+index 6a50d57..6f8a097 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -1,4 +1,4 @@
+-import { $ as validAppVersion, A as classifyUpstreamError, B as randomSentinel, C as resolveLoginRegion, D as parseWorkBuddyAuth, E as WorkBuddyCredentialStore, F as prepareInternationalChatBody, G as readCliVersion, H as FALLBACK_CN_APP_VERSION, I as realmOf, J as WORKBUDDY_APP_VERSION_FILENAME, K as resolveChatIdentity, L as regionOf, M as normalizeCredits, N as parseModelCatalog, O as workbuddyOwnAuthPath, P as prepareChatBody, Q as resolveAppVersion, R as PROBE_EFFORT_CANDIDATES, S as normalizeLoginRegion, T as WORKBUDDY_CREDENTIAL_SOURCE, U as chatUserAgent, V as CN_APP_VERSION_FILENAME, W as fallbackChatIdentity, X as installedAppVersion, Y as appUserAgent, Z as readBundleVersion, _ as WORKBUDDY_LOGIN_PATH, a as WORKBUDDY_HOST_HEARTBEAT_FILENAME, b as LOGIN_PENDING_CODE, c as processStartTimeMs, d as writeHostHeartbeat, et as WORKBUDDY_DATA_DIR_ENV, f as WORKBUDDY_CONNECT_VERSION, g as WORKBUDDY_AI_LOGIN_PATH, h as WorkBuddyCatalog, i as variantFor, j as modelWithCurrentPromotion, k as WorkBuddyUpstreamClient, l as readHostHeartbeat, m as FALLBACK_WORKBUDDY_MODELS, n as CN_VARIANT, nt as workbuddyPluginDataDir, o as clearHostHeartbeat, p as FALLBACK_WORKBUDDY_AI_MODELS, q as validCliVersion, r as WORKBUDDY_VARIANTS, rt as workbuddyStateDir, s as isHeartbeatProcessAlive, t as AI_VARIANT, tt as WORKBUDDY_DATA_DIR_NAME, u as workbuddyHostHeartbeatPath, w as WORKBUDDY_AUTH_FILENAME, x as WorkBuddyLoginClient, z as probeModel } from "./variants-BnZhFBG7.js";
++import { $ as validAppVersion, A as classifyUpstreamError, B as randomSentinel, C as resolveLoginRegion, D as parseWorkBuddyAuth, E as WorkBuddyCredentialStore, F as prepareInternationalChatBody, G as readCliVersion, H as FALLBACK_CN_APP_VERSION, I as realmOf, J as WORKBUDDY_APP_VERSION_FILENAME, K as resolveChatIdentity, L as regionOf, M as normalizeCredits, N as parseModelCatalog, O as workbuddyOwnAuthPath, P as prepareChatBody, Q as resolveAppVersion, R as PROBE_EFFORT_CANDIDATES, S as normalizeLoginRegion, T as WORKBUDDY_CREDENTIAL_SOURCE, U as chatUserAgent, V as CN_APP_VERSION_FILENAME, W as fallbackChatIdentity, X as installedAppVersion, Y as appUserAgent, Z as readBundleVersion, _ as WORKBUDDY_LOGIN_PATH, a as WORKBUDDY_HOST_HEARTBEAT_FILENAME, b as LOGIN_PENDING_CODE, c as processStartTimeMs, d as writeHostHeartbeat, et as WORKBUDDY_DATA_DIR_ENV, f as WORKBUDDY_CONNECT_VERSION, g as WORKBUDDY_AI_LOGIN_PATH, h as WorkBuddyCatalog, i as variantFor, j as modelWithCurrentPromotion, k as WorkBuddyUpstreamClient, l as readHostHeartbeat, m as FALLBACK_WORKBUDDY_MODELS, n as CN_VARIANT, nt as workbuddyPluginDataDir, o as clearHostHeartbeat, p as FALLBACK_WORKBUDDY_AI_MODELS, q as validCliVersion, r as WORKBUDDY_VARIANTS, rt as workbuddyStateDir, s as isHeartbeatProcessAlive, t as AI_VARIANT, tt as WORKBUDDY_DATA_DIR_NAME, u as workbuddyHostHeartbeatPath, w as WORKBUDDY_AUTH_FILENAME, x as WorkBuddyLoginClient, z as probeModel } from "./variants-B7B2j1m-.js";
+ import z from "@deepseek-ai/schemastery";
+ import { dirname, join, resolve } from "node:path";
+ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+@@ -1982,8 +1982,8 @@ var CheckInScheduler = class {
+ //#region src/index.ts
+ /** Stable Cordis plugin name. */
+ const name = "llm-workbuddy";
+-/** The model registry required before the provider can register. */
+-const inject = ["llm"];
++/** The model registry and settings services required by this plugin. */
++const inject = ["llm", "settings"];
+ /**
+ * Settings namespace owning the CN card's section.
+ *
+@@ -2156,15 +2156,32 @@ const Config = z.object({
+ 	checkInMinuteAI: CHECK_IN_MINUTE_FIELD,
+ 	quotaPollMs: QUOTA_POLL_FIELD
+ });
+-z.object({
++/**
++* The CN card's settings section: only the fields that card edits.
++*
++* A section is what makes its namespace "served", which is what the Plugins
++* tab dispatches a card by — so the schema and the card must stay split the
++* same way. `probeConsent` lives here because it predates the second variant;
++* it gates no current code path (only manual, per-click-confirmed probes run),
++* so it is left where existing users set it rather than moved and re-asked.
++*/
++const CN_SECTION = z.object({
+ 	probeConsent: PROBE_CONSENT_FIELD,
+ 	disabledModelsCN: DISABLED_MODELS_FIELD
+ });
+-z.object({
++/** The international card's settings section and its context-window preference. */
++const AI_SECTION = z.object({
+ 	useMaximumContextWindow: MAXIMUM_CONTEXT_WINDOW_FIELD,
+ 	disabledModelsAI: DISABLED_MODELS_FIELD
+ });
+-z.object({
++/**
++* The shared quota card's section: both sidebar toggles and the poll interval.
++*
++* Only these fields — the card edits nothing else, and the Plugins tab pairs a
++* card with the section whose namespace it names, so a stray field here would
++* render as a control no other surface reads.
++*/
++const QUOTA_SECTION = z.object({
+ 	sidebarQuotaCN: QUOTA_TOGGLE_FIELD,
+ 	sidebarQuotaAI: QUOTA_TOGGLE_FIELD,
+ 	autoCheckInCN: AUTO_CHECK_IN_FIELD,
+@@ -3075,6 +3092,7 @@ function apply(ctx, config) {
+ 		}
+ 	};
+ 	ctx.inject(["settings"], (settingsCtx) => {
++		ctx.logger.info("[dsh-workbuddy-connect] settings service detected, registering namespaces...");
+ 		const settings = settingsCtx.settings;
+ 		if (typeof settings.configure === "function") try {
+ 			settingsCtx.effect(() => {
+@@ -3084,6 +3102,31 @@ function apply(ctx, config) {
+ 		} catch (error) {
+ 			console.error("[dsh-workbuddy-connect] settings.configure failed (own settings file still serves):", error);
+ 		}
++		const noopHooks = {
++			setSource() {},
++			onChange() {}
++		};
++		const registerNs = (ns, schema) => {
++			if (typeof settings.installSection === "function") try {
++				settings.installSection(ctx, ns, schema, config, noopHooks);
++				ctx.logger.info(`[dsh-workbuddy-connect] namespace "${ns}" registered via installSection`);
++				return;
++			} catch (e) {
++				ctx.logger.warn(`[dsh-workbuddy-connect] installSection failed for "${ns}":`, e);
++			}
++			if (typeof settings.register === "function") try {
++				settings.register(ns, schema, {
++					base: config,
++					applies: "live"
++				});
++				ctx.logger.info(`[dsh-workbuddy-connect] namespace "${ns}" registered via register`);
++			} catch (e) {
++				ctx.logger.warn(`[dsh-workbuddy-connect] register failed for "${ns}":`, e);
++			}
++		};
++		registerNs(WORKBUDDY_SETTINGS_NS, CN_SECTION);
++		registerNs(WORKBUDDY_AI_SETTINGS_NS, AI_SECTION);
++		registerNs(WORKBUDDY_QUOTA_SETTINGS_NS, QUOTA_SECTION);
+ 		/**
+ 		* The two setters, now one implementation on both hosts: write the
+ 		* plugin-owned settings file, then apply the new view in memory. No
+diff --git a/lib/variants-BnZhFBG7.js b/lib/variants-B7B2j1m-.js
+similarity index 99%
+rename from lib/variants-BnZhFBG7.js
+rename to lib/variants-B7B2j1m-.js
+index 5ee18fe..ce9ad56 100644
+--- a/lib/variants-BnZhFBG7.js
++++ b/lib/variants-B7B2j1m-.js
+@@ -3074,7 +3074,7 @@ var WorkBuddyCatalog = class {
+ };
+ //#endregion
+ //#region src/version.ts
+-const WORKBUDDY_CONNECT_VERSION = "0.6.6";
++const WORKBUDDY_CONNECT_VERSION = "0.6.7";
+ //#endregion
+ //#region src/host-heartbeat.ts
+ /**
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 7889bb5..4f69ae7 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -7,6 +7,10 @@ settings:
+ importers:
+ 
+   .:
++    dependencies:
++      js-yaml:
++        specifier: ^4.1.0
++        version: 4.3.2
+     devDependencies:
+       '@deepseek-ai/cordis':
+         specifier: ^4.0.2
+@@ -16,7 +20,7 @@ importers:
+         version: 0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)
+       '@deepseek-ai/dsh-attachment':
+         specifier: ^0.1.5-rc.1
+-        version: 0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-brand@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2))
++        version: 0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-brand@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))
+       '@deepseek-ai/dsh-client-locale':
+         specifier: ^0.1.5-rc.1
+         version: 0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)
+@@ -55,10 +59,10 @@ importers:
+         version: 0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)
+       '@deepseek-ai/dsh-llm-pi-ai':
+         specifier: ^0.1.5-rc.1
+-        version: 0.1.5-rc.1(134303d99ddb72d36ce85dce9115e71b)
++        version: 0.1.5-rc.1(f680b45a15d24fd6650494ded60cefaa)
+       '@deepseek-ai/dsh-settings':
+         specifier: ^0.1.5-rc.1
+-        version: 0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-brand@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-session@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))))(@deepseek-ai/schemastery@3.18.2)
++        version: 0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-brand@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-session@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))))(@deepseek-ai/schemastery@3.18.2)
+       '@deepseek-ai/schemastery':
+         specifier: ^3.18.2
+         version: 3.18.2
+@@ -808,6 +812,9 @@ packages:
+     resolution: {integrity: sha512-BJ8/l4R5LRE7hW9WdSuGYrLSHi2ynxeFpDFbH0K/CgNeY/tyhk+vO6TYxXC5r5CpUhNVX310xzPsN/H9lCdfOA==}
+     engines: {node: '>=14'}
+ 
++  argparse@2.0.1:
++    resolution: {integrity: sha512-8+9WqebbFzpX9OR+Wa6O29asIogeRMzcGtAINdpMHHyAg10f05aSFVBbcEqGf/PXw1EjAZ+q2/bEBg3DvurK3Q==}
++
+   assertion-error@2.0.1:
+     resolution: {integrity: sha512-Izi8RQcffqCeNVgFigKli1ssklIbpHnCYc6AknXGYoB6grJqyeby7jv12JUQgmTAnIDnbck1uxksT4dzN3PWBA==}
+     engines: {node: '>=12'}
+@@ -974,6 +981,10 @@ packages:
+   js-tokens@4.0.0:
+     resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
+ 
++  js-yaml@4.3.2:
++    resolution: {integrity: sha512-SFNOvSJ+Dgf/9An904Yx+CgSlIPCkIpao4qo51lpee25TIRejdH3rhR4EZMGoNx3/TP3O+wzWuiTFl4sqbltzA==}
++    hasBin: true
++
+   json-bigint@1.0.0:
+     resolution: {integrity: sha512-SiPv/8VpZuWbvLSMtTDU8hEfrZWg/mH/nV/b4o0CYbSxu1UIQPLdwKOCIyLQX+VIPO5vrLX3i8qtqFyhdPSUSQ==}
+ 
+@@ -1658,10 +1669,10 @@ snapshots:
+     dependencies:
+       '@deepseek-ai/cordis': 4.0.2
+ 
+-  '@deepseek-ai/dsh-attachment@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-brand@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2))':
++  '@deepseek-ai/dsh-attachment@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-brand@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))':
+     dependencies:
+       '@deepseek-ai/cordis': 4.0.2
+-      '@deepseek-ai/dsh-brand': 0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-brand': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
+ 
+   '@deepseek-ai/dsh-authorization@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-credentials@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)))(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-llm@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2))':
+     dependencies:
+@@ -1718,10 +1729,10 @@ snapshots:
+       '@deepseek-ai/dsh-brand': 0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)
+       '@deepseek-ai/dsh-invariants': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
+ 
+-  '@deepseek-ai/dsh-fs@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-brand@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-llm@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-sandbox@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-llm@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-session@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)))))':
++  '@deepseek-ai/dsh-fs@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-brand@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-llm@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-sandbox@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-llm@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-session@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)))))':
+     dependencies:
+       '@deepseek-ai/cordis': 4.0.2
+-      '@deepseek-ai/dsh-brand': 0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-brand': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
+       '@deepseek-ai/dsh-invariants': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
+       '@deepseek-ai/dsh-llm': 0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)
+       '@deepseek-ai/dsh-sandbox': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-llm@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-session@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))))
+@@ -1748,18 +1759,18 @@ snapshots:
+     dependencies:
+       '@deepseek-ai/cordis': 4.0.2
+ 
+-  '@deepseek-ai/dsh-llm-pi-ai@0.1.5-rc.1(134303d99ddb72d36ce85dce9115e71b)':
++  '@deepseek-ai/dsh-llm-pi-ai@0.1.5-rc.1(f680b45a15d24fd6650494ded60cefaa)':
+     dependencies:
+       '@deepseek-ai/cordis': 4.0.2
+-      '@deepseek-ai/dsh-attachment': 0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-brand@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2))
++      '@deepseek-ai/dsh-attachment': 0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-brand@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))
+       '@deepseek-ai/dsh-authorization': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-credentials@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)))(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-llm@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2))
+       '@deepseek-ai/dsh-brand': 0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)
+       '@deepseek-ai/dsh-credentials': 0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))
+-      '@deepseek-ai/dsh-fs': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-brand@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-llm@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-sandbox@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-llm@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-session@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)))))
++      '@deepseek-ai/dsh-fs': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-brand@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-llm@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-sandbox@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-llm@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-session@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)))))
+       '@deepseek-ai/dsh-launch-environment': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
+       '@deepseek-ai/dsh-llm': 0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)
+-      '@deepseek-ai/dsh-settings': 0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-brand@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-session@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))))(@deepseek-ai/schemastery@3.18.2)
+-      '@deepseek-ai/dsh-timeout': 0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-settings': 0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-brand@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-session@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))))(@deepseek-ai/schemastery@3.18.2)
++      '@deepseek-ai/dsh-timeout': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
+       '@deepseek-ai/dsh-util-values': 0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)
+       '@deepseek-ai/schemastery': 3.18.2
+       '@earendil-works/pi-ai': 0.85.1(ws@8.21.3)(zod@4.4.3)
+@@ -1813,10 +1824,10 @@ snapshots:
+       '@deepseek-ai/dsh-scope': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))
+       '@deepseek-ai/dsh-util-values': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
+ 
+-  '@deepseek-ai/dsh-settings@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-brand@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-session@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))))(@deepseek-ai/schemastery@3.18.2)':
++  '@deepseek-ai/dsh-settings@0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-brand@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-session@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2))))(@deepseek-ai/schemastery@3.18.2)':
+     dependencies:
+       '@deepseek-ai/cordis': 4.0.2
+-      '@deepseek-ai/dsh-brand': 0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)
++      '@deepseek-ai/dsh-brand': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
+       '@deepseek-ai/dsh-invariants': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
+       '@deepseek-ai/dsh-session': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)))
+       '@deepseek-ai/dsh-util-values': 0.1.5-rc.1(@deepseek-ai/cordis@4.0.2)
+@@ -2169,6 +2180,8 @@ snapshots:
+ 
+   ansis@4.3.1: {}
+ 
++  argparse@2.0.1: {}
++
+   assertion-error@2.0.1: {}
+ 
+   base64-js@1.5.1: {}
+@@ -2310,6 +2323,10 @@ snapshots:
+ 
+   js-tokens@4.0.0: {}
+ 
++  js-yaml@4.3.2:
++    dependencies:
++      argparse: 2.0.1
++
+   json-bigint@1.0.0:
+     dependencies:
+       bignumber.js: 9.3.1
+diff --git a/src/client/http-settings-scope.ts b/src/client/http-settings-scope.ts
+index 0f445fb..c1247ce 100644
+--- a/src/client/http-settings-scope.ts
++++ b/src/client/http-settings-scope.ts
+@@ -14,7 +14,8 @@
+  * the card needs no change at all.
+  */
+ 
+-import type { QuotaSettingsScope } from './QuotaSettingsCard.tsx'
++import type { SettingsScope } from './quota-settings-store.ts'
++export type QuotaSettingsScope<T> = SettingsScope<T>
+ 
+ /** Base path of the host half's settings face. */
+ const ROUTE_BASE = '/plugins/dsh-workbuddy-connect'
+diff --git a/src/client/index.tsx b/src/client/index.tsx
+index 422bfbf..1c481f5 100644
+--- a/src/client/index.tsx
++++ b/src/client/index.tsx
+@@ -92,31 +92,7 @@ const PACKAGE_NAME = 'dsh-workbuddy-connect'
+  */
+ const QUOTA_SETTINGS_NAMESPACE = 'workbuddy-quota'
+ 
+-/**
+- * The shared 《插件设置》 container the three connect plugins agree on: slot
+- * `settings.section`, entry id `plugin-settings`, child slot
+- * `plugin-settings.item`. The id and the child slot name must stay identical
+- * across the three plugins — a mismatch would produce two half-empty blocks,
+- * or a container whose child slot nobody declared.
+- */
+-const PLUGIN_SETTINGS_SECTION_ID = 'plugin-settings'
+-const PLUGIN_SETTINGS_ITEM_SLOT = 'plugin-settings.item'
+ 
+-/**
+- * The container component of the shared 《插件设置》 block.
+- *
+- * It owns no content of its own: every attached plugin registers a card into
+- * the child slot this entry declares, and the container renders them. Only the
+- * plugin that wins the container registration mounts this; a plugin that lost
+- * the race registers into the winner's container and never mounts it.
+- */
+-function PluginSettingsSection(props: PropsRuntime<'settings.section'> & PropsRenderSlots<'plugin-settings.item'>): React.ReactNode {
+-  return (
+-    <ul style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 0, listStyle: 'none' }}>
+-      {props.renderSlot(PLUGIN_SETTINGS_ITEM_SLOT, {})}
+-    </ul>
+-  )
+-}
+ 
+ /** The settings namespaces each variant's card and section use (host-side constants, mirrored for paths). */
+ const VARIANT_STATUS: Record<string, string> = {
+@@ -200,11 +176,8 @@ export function apply(ctx: ClientContext): void {
+     const ownQuotaScope = new OwnQuotaSettingsScope()
+     void ownQuotaScope.load().catch(() => {})
+     adoptQuotaScope(ownQuotaScope as never)
+-    try {
+-      registerPluginSettings()
+-    } catch (error: unknown) {
+-      console.error('[dsh-workbuddy-connect] plugin settings block registration failed (host provider unaffected):', error)
+-    }
++
++    // 统一 WorkBuddy 插件配置卡片：恢复入口至「设置 - 插件 - 插件配置」(settings.plugin.item)
+     try {
+       ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
+         name: 'settings.plugin.item',
+@@ -222,65 +195,6 @@ export function apply(ctx: ClientContext): void {
+       console.error('[dsh-workbuddy-connect] plugin card registration failed (host provider unaffected):', error)
+     }
+ 
+-    /**
+-     * Register this plugin's seat in the shared 《插件设置》 block.
+-     *
+-     * `settings.section` is a list slot owned by the settings shell, and a
+-     * slot's CHILDREN are declared exactly once, by one entry — so three
+-     * plugins cannot each create "their" block. They agree on one container
+-     * instead: entry id `plugin-settings`, which declares the child slot
+-     * `plugin-settings.item`, and each plugin contributes one card into that
+-     * child with its own package name as the entry id. The protocol:
+-     *
+-     * 1. wait for the shell to declare `settings.section`;
+-     * 2. probe whether a sibling already registered the `plugin-settings` entry;
+-     * 3. if so, attach this plugin's card to the sibling's container;
+-     * 4. otherwise register the container (which declares the child slot) and
+-     *    then attach to it — losing that race throws, and the loser takes
+-     *    step 3.
+-     */
+-    function registerPluginSettings(): void {
+-      const registerItem = (): (() => void) => ctx.slots.register({
+-        name: PLUGIN_SETTINGS_ITEM_SLOT,
+-        id: PACKAGE_NAME,
+-        // 《插件设置》卡片统一排位（列表按 order 升序渲染）：
+-        // session-prompt 10 / workbuddy 20 / qoder 30。
+-        order: 20,
+-        inject: (): WorkBuddyPluginCardInjected => ({
+-          t,
+-          scope: quotaScope,
+-          signedIn: () => quotaSignInState(),
+-          unified: true,
+-        }),
+-      }, WorkBuddyPluginCard)
+-      // The callback returns its disposers: `slots.inject` owns them for the
+-      // declaration's lifetime, so the container and this plugin's card are
+-      // torn down together when the shell collapses `settings.section`.
+-      ctx.slots.inject('settings.section', () => {
+-        const taken = ctx.slots.entries('settings.section')
+-          .some(entry => entry.options?.id === PLUGIN_SETTINGS_SECTION_ID)
+-        if (taken) return registerItem()
+-        try {
+-          const disposeContainer = ctx.slots.register({
+-            name: 'settings.section',
+-            id: PLUGIN_SETTINGS_SECTION_ID,
+-            // The shell orders these sections itself; 900 keeps the shared
+-            // block at the end, where the connect plugins' cards used to sit.
+-            order: 900,
+-            // The shared block's nav label. Only the winner's label is ever
+-            // shown, and the three plugins register the same text.
+-            label: () => '插件设置',
+-            children: { [PLUGIN_SETTINGS_ITEM_SLOT]: { kind: 'list', scope: 'root' } },
+-          }, PluginSettingsSection)
+-          return [disposeContainer, registerItem()]
+-        } catch {
+-          // A sibling registered the container between the probe and this
+-          // call: its child slot is declared, so attach to it instead.
+-          return registerItem()
+-        }
+-      })
+-    }
+-
+     // Sidebar quota cards + the dashboard they open. Two registrations, one
+     // navigation entry — commandcode's pattern: the layout's keyed `main` slot
+     // holds the shared dashboard, each footer card selects it on click. The
+diff --git a/src/client/quota-slots.ts b/src/client/quota-slots.ts
+index 6cec739..5dd2fbd 100644
+--- a/src/client/quota-slots.ts
++++ b/src/client/quota-slots.ts
+@@ -27,18 +27,6 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
+      * owner passes only the column state.
+      */
+     'sidebar.footer.action': { kind: 'list'; scope: 'root'; owner: SidebarFooterActionOwnerProps }
+-    /**
+-     * One plugin's card inside the shared 《插件设置》 block (DSH 0.1.7, where
+-     * the Plugins page's own `settings.plugin.item` seat no longer exists).
+-     *
+-     * Not declared by any host package: the CONTAINER entry declares it, and
+-     * whichever of the connect plugins registers the container first is that
+-     * container (see the container/back-off protocol in `./index.tsx`). Every
+-     * plugin then contributes one entry whose `id` is its package name, so the
+-     * blocks never collide. Restated here because the child key has to exist in
+-     * `SlotMap` for the container's `renderSlot` call to type-check.
+-     */
+-    'plugin-settings.item': { kind: 'list'; scope: 'root' }
+   }
+ }
+ 
+diff --git a/src/index.ts b/src/index.ts
+index f5f3348..b69be4e 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -171,8 +171,8 @@ export {
+ /** Stable Cordis plugin name. */
+ export const name = 'llm-workbuddy'
+ 
+-/** The model registry required before the provider can register. */
+-export const inject = ['llm']
++/** The model registry and settings services required by this plugin. */
++export const inject = ['llm', 'settings'] as const
+ 
+ /**
+  * Settings namespace owning the CN card's section.
+@@ -1630,8 +1630,21 @@ export function apply(ctx: Context, config: Config): void {
+   }
+ 
+   ctx.inject(['settings'], settingsCtx => {
++    ctx.logger.info('[dsh-workbuddy-connect] settings service detected, registering namespaces...')
+     const settings = settingsCtx.settings as unknown as {
+       configure?: (presentation: { auto?: boolean }, owner?: unknown) => unknown
++      installSection?: (
++        owner: unknown,
++        ns: SettingsNamespace,
++        schema: unknown,
++        entry: unknown,
++        hooks: { setSource: (s: unknown) => void; onChange: () => void },
++      ) => void
++      register?: (
++        ns: SettingsNamespace,
++        schema: unknown,
++        options: { base?: unknown; applies?: string },
++      ) => unknown
+     }
+     if (typeof settings.configure === 'function') {
+       try {
+@@ -1644,6 +1657,34 @@ export function apply(ctx: Context, config: Config): void {
+       }
+     }
+ 
++    const noopHooks = {
++      setSource() {},
++      onChange() {},
++    }
++    const registerNs = (ns: SettingsNamespace, schema: unknown) => {
++      if (typeof settings.installSection === 'function') {
++        try {
++          settings.installSection(ctx, ns, schema, config, noopHooks)
++          ctx.logger.info(`[dsh-workbuddy-connect] namespace "${ns}" registered via installSection`)
++          return
++        } catch (e) {
++          ctx.logger.warn(`[dsh-workbuddy-connect] installSection failed for "${ns}":`, e)
++        }
++      }
++      if (typeof settings.register === 'function') {
++        try {
++          settings.register(ns, schema, { base: config, applies: 'live' })
++          ctx.logger.info(`[dsh-workbuddy-connect] namespace "${ns}" registered via register`)
++        } catch (e) {
++          ctx.logger.warn(`[dsh-workbuddy-connect] register failed for "${ns}":`, e)
++        }
++      }
++    }
++
++    registerNs(WORKBUDDY_SETTINGS_NS, CN_SECTION)
++    registerNs(WORKBUDDY_AI_SETTINGS_NS, AI_SECTION)
++    registerNs(WORKBUDDY_QUOTA_SETTINGS_NS, QUOTA_SECTION)
++
+     /**
+      * The two setters, now one implementation on both hosts: write the
+      * plugin-owned settings file, then apply the new view in memory. No
