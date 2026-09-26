@@ -27,18 +27,6 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      * owner passes only the column state.
      */
     'sidebar.footer.action': { kind: 'list'; scope: 'root'; owner: SidebarFooterActionOwnerProps }
-    /**
-     * One plugin's card inside the shared 《插件设置》 block (DSH 0.1.7, where
-     * the Plugins page's own `settings.plugin.item` seat no longer exists).
-     *
-     * Not declared by any host package: the CONTAINER entry declares it, and
-     * whichever of the connect plugins registers the container first is that
-     * container (see the container/back-off protocol in `./index.tsx`). Every
-     * plugin then contributes one entry whose `id` is its package name, so the
-     * blocks never collide. Restated here because the child key has to exist in
-     * `SlotMap` for the container's `renderSlot` call to type-check.
-     */
-    'plugin-settings.item': { kind: 'list'; scope: 'root' }
   }
 }
 

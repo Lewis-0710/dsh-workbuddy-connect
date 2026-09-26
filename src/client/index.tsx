@@ -92,31 +92,7 @@ const PACKAGE_NAME = 'dsh-workbuddy-connect'
  */
 const QUOTA_SETTINGS_NAMESPACE = 'workbuddy-quota'
 
-/**
- * The shared 《插件设置》 container the three connect plugins agree on: slot
- * `settings.section`, entry id `plugin-settings`, child slot
- * `plugin-settings.item`. The id and the child slot name must stay identical
- * across the three plugins — a mismatch would produce two half-empty blocks,
- * or a container whose child slot nobody declared.
- */
-const PLUGIN_SETTINGS_SECTION_ID = 'plugin-settings'
-const PLUGIN_SETTINGS_ITEM_SLOT = 'plugin-settings.item'
 
-/**
- * The container component of the shared 《插件设置》 block.
- *
- * It owns no content of its own: every attached plugin registers a card into
- * the child slot this entry declares, and the container renders them. Only the
- * plugin that wins the container registration mounts this; a plugin that lost
- * the race registers into the winner's container and never mounts it.
- */
-function PluginSettingsSection(props: PropsRuntime<'settings.section'> & PropsRenderSlots<'plugin-settings.item'>): React.ReactNode {
-  return (
-    <ul style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 0, listStyle: 'none' }}>
-      {props.renderSlot(PLUGIN_SETTINGS_ITEM_SLOT, {})}
-    </ul>
-  )
-}
 
 /** The settings namespaces each variant's card and section use (host-side constants, mirrored for paths). */
 const VARIANT_STATUS: Record<string, string> = {
@@ -200,11 +176,8 @@ export function apply(ctx: ClientContext): void {
     const ownQuotaScope = new OwnQuotaSettingsScope()
     void ownQuotaScope.load().catch(() => {})
     adoptQuotaScope(ownQuotaScope as never)
-    try {
-      registerPluginSettings()
-    } catch (error: unknown) {
-      console.error('[dsh-workbuddy-connect] plugin settings block registration failed (host provider unaffected):', error)
-    }
+
+    // 统一 WorkBuddy 插件配置卡片：恢复入口至「设置 - 插件 - 插件配置」(settings.plugin.item)
     try {
       ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
         name: 'settings.plugin.item',
@@ -220,65 +193,6 @@ export function apply(ctx: ClientContext): void {
       }, WorkBuddyPluginCard))
     } catch (error: unknown) {
       console.error('[dsh-workbuddy-connect] plugin card registration failed (host provider unaffected):', error)
-    }
-
-    /**
-     * Register this plugin's seat in the shared 《插件设置》 block.
-     *
-     * `settings.section` is a list slot owned by the settings shell, and a
-     * slot's CHILDREN are declared exactly once, by one entry — so three
-     * plugins cannot each create "their" block. They agree on one container
-     * instead: entry id `plugin-settings`, which declares the child slot
-     * `plugin-settings.item`, and each plugin contributes one card into that
-     * child with its own package name as the entry id. The protocol:
-     *
-     * 1. wait for the shell to declare `settings.section`;
-     * 2. probe whether a sibling already registered the `plugin-settings` entry;
-     * 3. if so, attach this plugin's card to the sibling's container;
-     * 4. otherwise register the container (which declares the child slot) and
-     *    then attach to it — losing that race throws, and the loser takes
-     *    step 3.
-     */
-    function registerPluginSettings(): void {
-      const registerItem = (): (() => void) => ctx.slots.register({
-        name: PLUGIN_SETTINGS_ITEM_SLOT,
-        id: PACKAGE_NAME,
-        // 《插件设置》卡片统一排位（列表按 order 升序渲染）：
-        // session-prompt 10 / workbuddy 20 / qoder 30。
-        order: 20,
-        inject: (): WorkBuddyPluginCardInjected => ({
-          t,
-          scope: quotaScope,
-          signedIn: () => quotaSignInState(),
-          unified: true,
-        }),
-      }, WorkBuddyPluginCard)
-      // The callback returns its disposers: `slots.inject` owns them for the
-      // declaration's lifetime, so the container and this plugin's card are
-      // torn down together when the shell collapses `settings.section`.
-      ctx.slots.inject('settings.section', () => {
-        const taken = ctx.slots.entries('settings.section')
-          .some(entry => entry.options?.id === PLUGIN_SETTINGS_SECTION_ID)
-        if (taken) return registerItem()
-        try {
-          const disposeContainer = ctx.slots.register({
-            name: 'settings.section',
-            id: PLUGIN_SETTINGS_SECTION_ID,
-            // The shell orders these sections itself; 900 keeps the shared
-            // block at the end, where the connect plugins' cards used to sit.
-            order: 900,
-            // The shared block's nav label. Only the winner's label is ever
-            // shown, and the three plugins register the same text.
-            label: () => '插件设置',
-            children: { [PLUGIN_SETTINGS_ITEM_SLOT]: { kind: 'list', scope: 'root' } },
-          }, PluginSettingsSection)
-          return [disposeContainer, registerItem()]
-        } catch {
-          // A sibling registered the container between the probe and this
-          // call: its child slot is declared, so attach to it instead.
-          return registerItem()
-        }
-      })
     }
 
     // Sidebar quota cards + the dashboard they open. Two registrations, one

@@ -14,7 +14,8 @@
  * the card needs no change at all.
  */
 
-import type { QuotaSettingsScope } from './QuotaSettingsCard.tsx'
+import type { SettingsScope } from './quota-settings-store.ts'
+export type QuotaSettingsScope<T> = SettingsScope<T>
 
 /** Base path of the host half's settings face. */
 const ROUTE_BASE = '/plugins/dsh-workbuddy-connect'

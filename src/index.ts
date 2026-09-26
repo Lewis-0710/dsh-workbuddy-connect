@@ -171,8 +171,8 @@ export {
 /** Stable Cordis plugin name. */
 export const name = 'llm-workbuddy'
 
-/** The model registry required before the provider can register. */
-export const inject = ['llm']
+/** The model registry and settings services required by this plugin. */
+export const inject = ['llm', 'settings'] as const
 
 /**
  * Settings namespace owning the CN card's section.
@@ -1630,8 +1630,21 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   ctx.inject(['settings'], settingsCtx => {
+    ctx.logger.info('[dsh-workbuddy-connect] settings service detected, registering namespaces...')
     const settings = settingsCtx.settings as unknown as {
       configure?: (presentation: { auto?: boolean }, owner?: unknown) => unknown
+      installSection?: (
+        owner: unknown,
+        ns: SettingsNamespace,
+        schema: unknown,
+        entry: unknown,
+        hooks: { setSource: (s: unknown) => void; onChange: () => void },
+      ) => void
+      register?: (
+        ns: SettingsNamespace,
+        schema: unknown,
+        options: { base?: unknown; applies?: string },
+      ) => unknown
     }
     if (typeof settings.configure === 'function') {
       try {
@@ -1643,6 +1656,34 @@ export function apply(ctx: Context, config: Config): void {
         console.error('[dsh-workbuddy-connect] settings.configure failed (own settings file still serves):', error)
       }
     }
+
+    const noopHooks = {
+      setSource() {},
+      onChange() {},
+    }
+    const registerNs = (ns: SettingsNamespace, schema: unknown) => {
+      if (typeof settings.installSection === 'function') {
+        try {
+          settings.installSection(ctx, ns, schema, config, noopHooks)
+          ctx.logger.info(`[dsh-workbuddy-connect] namespace "${ns}" registered via installSection`)
+          return
+        } catch (e) {
+          ctx.logger.warn(`[dsh-workbuddy-connect] installSection failed for "${ns}":`, e)
+        }
+      }
+      if (typeof settings.register === 'function') {
+        try {
+          settings.register(ns, schema, { base: config, applies: 'live' })
+          ctx.logger.info(`[dsh-workbuddy-connect] namespace "${ns}" registered via register`)
+        } catch (e) {
+          ctx.logger.warn(`[dsh-workbuddy-connect] register failed for "${ns}":`, e)
+        }
+      }
+    }
+
+    registerNs(WORKBUDDY_SETTINGS_NS, CN_SECTION)
+    registerNs(WORKBUDDY_AI_SETTINGS_NS, AI_SECTION)
+    registerNs(WORKBUDDY_QUOTA_SETTINGS_NS, QUOTA_SECTION)
 
     /**
      * The two setters, now one implementation on both hosts: write the

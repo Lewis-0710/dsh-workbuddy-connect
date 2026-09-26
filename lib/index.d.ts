@@ -1433,8 +1433,8 @@ declare function isHeartbeatProcessAlive(heartbeat: WorkBuddyHostHeartbeat): boo
 //#region src/index.d.ts
 /** Stable Cordis plugin name. */
 declare const name = "llm-workbuddy";
-/** The model registry required before the provider can register. */
-declare const inject: string[];
+/** The model registry and settings services required by this plugin. */
+declare const inject: readonly ["llm", "settings"];
 /**
  * Settings namespace owning the CN card's section.
  *
